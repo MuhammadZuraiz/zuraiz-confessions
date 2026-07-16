@@ -6,6 +6,13 @@ export type Confession = {
   unlock_date: string | null;
   is_read: boolean;
   created_at: string;
+  // Added by supabase/upgrade-01.sql — optional so the UI degrades
+  // gracefully if the upgrade hasn't been run yet.
+  opened_at?: string | null;
+  reaction?: string | null;
+  reacted_at?: string | null;
+  audio_url?: string | null;
+  stationery?: string | null;
 };
 
 export function getConfessionImages(confession: Confession): string[] {
@@ -29,6 +36,31 @@ export function daysUntil(dateStr: string): number {
   today.setHours(0, 0, 0, 0);
   const unlock = new Date(dateStr + "T00:00:00");
   return Math.ceil((unlock.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/** A sealed letter whose day has arrived but that hasn't been ceremonially opened yet. */
+export function needsCeremony(confession: Confession): boolean {
+  return isUnlocked(confession) && !!confession.unlock_date && !confession.opened_at;
+}
+
+/**
+ * If the letter was written on this day-of-month in an earlier month,
+ * returns how many months ago; otherwise null.
+ */
+export function monthsAgoToday(confession: Confession, now = new Date()): number | null {
+  const written = new Date(confession.created_at);
+  if (written.getDate() !== now.getDate()) return null;
+  const months =
+    (now.getFullYear() - written.getFullYear()) * 12 + (now.getMonth() - written.getMonth());
+  return months >= 1 ? months : null;
+}
+
+export function formatMonthsAgo(months: number): string {
+  if (months % 12 === 0) {
+    const years = months / 12;
+    return years === 1 ? "a year" : `${years} years`;
+  }
+  return months === 1 ? "a month" : `${months} months`;
 }
 
 export function formatLongDate(dateStr: string): string {

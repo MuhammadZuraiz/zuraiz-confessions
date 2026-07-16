@@ -5,9 +5,14 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { config } from "@/lib/config";
 import { formatLongDate } from "@/lib/confessions";
+import { getStationery, type StationeryId } from "@/lib/stationery";
+import StationeryPicker from "@/components/StationeryPicker";
+import VoiceRecorder, { type RecordedAudio } from "@/components/VoiceRecorder";
 
 const MAX_IMAGE_BYTES = config.maxImageMb * 1024 * 1024;
 const COOLDOWN_KEY = "confession-post-last-submit";
+const DRAFT_KEY = "confession-post-draft";
+const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
@@ -34,6 +39,9 @@ export default function ConfessionForm() {
   const [text, setText] = useState("");
   const [images, setImages] = useState<SelectedImage[]>([]);
   const [unlockDate, setUnlockDate] = useState("");
+  const [stationery, setStationery] = useState<StationeryId>("cream");
+  const [audio, setAudio] = useState<RecordedAudio | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   // Remembered at submit time so the success stamp can still name the seal
@@ -47,6 +55,57 @@ export default function ConfessionForm() {
   useEffect(() => {
     imagesRef.current = images;
   }, [images]);
+
+  // Restore an unsent draft (text, seal date, stationery) on mount.
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const raw = window.localStorage.getItem(DRAFT_KEY);
+        if (!raw) return;
+        const draft = JSON.parse(raw) as {
+          text?: string;
+          unlockDate?: string;
+          stationery?: string;
+          savedAt?: number;
+        };
+        if (!draft.text?.trim() || !draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) {
+          window.localStorage.removeItem(DRAFT_KEY);
+          return;
+        }
+        setText(draft.text);
+        const today = new Date().toISOString().split("T")[0];
+        if (draft.unlockDate && draft.unlockDate >= today) setUnlockDate(draft.unlockDate);
+        if (["cream", "rose", "midnight"].includes(draft.stationery ?? "")) {
+          setStationery(draft.stationery as StationeryId);
+        }
+        setDraftRestored(true);
+        window.setTimeout(() => setDraftRestored(false), 5000);
+      } catch {
+        window.localStorage.removeItem(DRAFT_KEY);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Autosave the draft (debounced) so a half-written letter survives a closed tab.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (submitting) return;
+      if (!text.trim()) {
+        window.localStorage.removeItem(DRAFT_KEY);
+        return;
+      }
+      window.localStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify({ text, unlockDate, stationery, savedAt: Date.now() }),
+      );
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [text, unlockDate, stationery, submitting]);
 
   useEffect(
     () => () => {
@@ -145,15 +204,44 @@ export default function ConfessionForm() {
       imagePaths.push(path);
     }
 
+    let audioPath: string | null = null;
+    if (audio) {
+      const path = `${crypto.randomUUID()}.${audio.ext}`;
+      const { error: audioError } = await supabase.storage
+        .from("confession-audio")
+        .upload(path, audio.blob, {
+          cacheControl: "3600",
+          contentType: audio.contentType,
+          upsert: false,
+        });
+
+      if (audioError) {
+        setError("The voice note failed to upload. Try again, or post without it.");
+        setSubmitting(false);
+        return;
+      }
+
+      audioPath = path;
+    }
+
     const formData = new FormData();
     formData.set("text", trimmedText);
     if (unlockDate) formData.set("unlockDate", unlockDate);
+    formData.set("stationery", stationery);
+    if (audioPath) formData.set("audioPath", audioPath);
     imagePaths.forEach((path) => formData.append("imagePaths", path));
 
-    const response = await fetch("/api/confessions", {
-      method: "POST",
-      body: formData,
-    });
+    let response: Response;
+    try {
+      response = await fetch("/api/confessions", {
+        method: "POST",
+        body: formData,
+      });
+    } catch {
+      setError("The post office could not be reached. Please try again.");
+      setSubmitting(false);
+      return;
+    }
     const result = await response.json().catch(() => null);
 
     if (!response.ok) {
@@ -166,6 +254,11 @@ export default function ConfessionForm() {
     setText("");
     clearImages();
     setUnlockDate("");
+    if (audio) {
+      URL.revokeObjectURL(audio.url);
+      setAudio(null);
+    }
+    window.localStorage.removeItem(DRAFT_KEY);
     window.localStorage.setItem(COOLDOWN_KEY, String(Date.now()));
     setSubmitted(true);
     setSubmitting(false);
@@ -178,7 +271,14 @@ export default function ConfessionForm() {
   return (
     <div style={{ position: "relative" }}>
       <div className="airmail" />
-      <div className="sheet" style={{ borderRadius: "0 0 6px 6px", padding: "clamp(1.5rem, 4.5vw, 2.75rem)" }}>
+      <div
+        className={`sheet ${getStationery(stationery).className}`.trim()}
+        style={{
+          borderRadius: "0 0 6px 6px",
+          padding: "clamp(1.5rem, 4.5vw, 2.75rem)",
+          transition: "background 0.5s ease, border-color 0.5s ease",
+        }}
+      >
         {/* Decorative postage stamp */}
         <div
           aria-hidden="true"
@@ -209,11 +309,35 @@ export default function ConfessionForm() {
 
         {/* Dim the letter while the success stamp is pressed */}
         <motion.div animate={{ opacity: submitted ? 0.22 : 1 }} transition={{ duration: 0.35 }}>
+          {/* Stationery */}
+          <div style={{ marginBottom: "1.9rem", paddingRight: 64 }}>
+            <span className="tw field-label">Stationery</span>
+            <StationeryPicker value={stationery} onChange={setStationery} disabled={submitting} />
+          </div>
+
           {/* The confession */}
-          <div style={{ marginBottom: "2.1rem", paddingRight: 64 }}>
+          <div style={{ marginBottom: "2.1rem" }}>
             <label htmlFor="confession-text" className="tw field-label">
               The confession
             </label>
+            <AnimatePresence>
+              {draftRestored && (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  style={{
+                    fontFamily: "var(--serif)",
+                    fontStyle: "italic",
+                    fontSize: "0.8rem",
+                    color: "var(--ink-faint)",
+                    marginBottom: "0.6rem",
+                  }}
+                >
+                  Your unsent draft was restored. ✎
+                </motion.p>
+              )}
+            </AnimatePresence>
             <textarea
               id="confession-text"
               className="letter-input"
@@ -323,6 +447,14 @@ export default function ConfessionForm() {
               onChange={handleImages}
               style={{ display: "none" }}
             />
+          </div>
+
+          {/* Voice note */}
+          <div style={{ marginBottom: "2.1rem" }}>
+            <span className="tw field-label">
+              Add your voice <span className="field-hint">(optional)</span>
+            </span>
+            <VoiceRecorder value={audio} onChange={setAudio} disabled={submitting} />
           </div>
 
           {/* Error */}

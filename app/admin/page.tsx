@@ -4,33 +4,28 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { config } from "@/lib/config";
-import { isUnlocked, type Confession } from "@/lib/confessions";
-import Postmark from "@/components/Postmark";
+import {
+  isUnlocked,
+  needsCeremony,
+  monthsAgoToday,
+  formatMonthsAgo,
+  type Confession,
+} from "@/lib/confessions";
+import PasscodeGate from "@/components/PasscodeGate";
 import LockedCard from "@/components/LockedCard";
+import SealedReadyCard from "@/components/SealedReadyCard";
 import UnlockedCard from "@/components/UnlockedCard";
 
 type Filter = "all" | "unread" | "sealed";
 
-export default function AdminPage() {
-  const [authed, setAuthed] = useState(false);
-  const [password, setPassword] = useState("");
-  const [wrongPassword, setWrongPassword] = useState(false);
+function Mailbox({ lock }: { lock: () => void }) {
   const [confessions, setConfessions] = useState<Confession[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
-
-  const handleLogin = () => {
-    if (password === config.readerPassword) {
-      setAuthed(true);
-    } else {
-      setWrongPassword(true);
-      setTimeout(() => setWrongPassword(false), 2000);
-    }
-  };
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authed) return;
     const fetchConfessions = async () => {
       setLoading(true);
       const { data, error } = await supabase
@@ -42,120 +37,34 @@ export default function AdminPage() {
       setLoading(false);
     };
     fetchConfessions();
-  }, [authed]);
+  }, []);
 
-  const handleMarkRead = (id: string) => {
-    setConfessions((prev) => prev.map((c) => (c.id === id ? { ...c, is_read: true } : c)));
+  const handleUpdate = (id: string, patch: Partial<Confession>) => {
+    setConfessions((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   };
 
   const filtered = confessions.filter((c) => {
     if (filter === "unread") return !c.is_read && isUnlocked(c);
-    if (filter === "sealed") return !isUnlocked(c);
+    if (filter === "sealed") return !isUnlocked(c) || needsCeremony(c);
     return true;
   });
 
   const unreadCount = confessions.filter((c) => !c.is_read && isUnlocked(c)).length;
-  const sealedCount = confessions.filter((c) => !isUnlocked(c)).length;
+  const sealedCount = confessions.filter((c) => !isUnlocked(c) || needsCeremony(c)).length;
 
-  /* ── The gate ── */
-  if (!authed) {
-    return (
-      <main
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "2rem 1.25rem",
-        }}
-      >
-        <div className="rise" style={{ width: "100%", maxWidth: 400 }}>
-          <div className="airmail" />
-          <div
-            className="sheet"
-            style={{ borderRadius: "0 0 6px 6px", padding: "2.5rem 2rem 2.25rem", textAlign: "center" }}
-          >
-            <div style={{ display: "flex", justifyContent: "center", marginBottom: "1.4rem" }}>
-              <Postmark
-                size={84}
-                ring="REGISTERED MAIL · ADDRESSEE ONLY · PRIVATE ·"
-                line1="P.O."
-                line2="BOX 2"
-                style={{ color: "var(--wax)", opacity: 0.65, transform: "rotate(-7deg)" }}
-              />
-            </div>
+  // "On this day" — an unlocked letter written on this day-of-month, months ago.
+  const onThisDay = confessions
+    .filter((c) => isUnlocked(c) && !needsCeremony(c))
+    .map((c) => ({ confession: c, months: monthsAgoToday(c) }))
+    .filter((entry): entry is { confession: Confession; months: number } => entry.months !== null)
+    .sort((a, b) => b.months - a.months)[0];
 
-            <h1
-              style={{
-                fontFamily: "var(--serif)",
-                fontWeight: 300,
-                fontSize: "1.9rem",
-                color: "var(--ink-strong)",
-                marginBottom: "0.5rem",
-              }}
-            >
-              The mailbox
-            </h1>
-            <p
-              style={{
-                fontFamily: "var(--serif)",
-                fontStyle: "italic",
-                fontSize: "0.9rem",
-                color: "var(--ink-soft)",
-                marginBottom: "2rem",
-              }}
-            >
-              These letters are addressed to {config.readerName} only.
-            </p>
+  const jumpTo = (id: string) => {
+    document.getElementById(`letter-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightId(id);
+    setTimeout(() => setHighlightId(null), 2600);
+  };
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
-              <motion.input
-                type="password"
-                className="passcode"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                placeholder="the passcode"
-                animate={wrongPassword ? { x: [-8, 8, -8, 8, 0] } : {}}
-                transition={{ duration: 0.4 }}
-                style={wrongPassword ? { borderColor: "rgba(167,47,34,0.55)" } : {}}
-              />
-
-              <AnimatePresence>
-                {wrongPassword && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    style={{
-                      fontFamily: "var(--serif)",
-                      fontStyle: "italic",
-                      fontSize: "0.82rem",
-                      color: "var(--wax)",
-                    }}
-                  >
-                    that&rsquo;s not the word ✕
-                  </motion.p>
-                )}
-              </AnimatePresence>
-
-              <motion.button
-                type="button"
-                className="btn-wax"
-                onClick={handleLogin}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.97 }}
-              >
-                Unlock the box
-              </motion.button>
-            </div>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  /* ── The mailbox ── */
   return (
     <main style={{ minHeight: "100vh", padding: "clamp(3rem, 7vh, 4.5rem) 1.25rem 7rem" }}>
       <div style={{ maxWidth: 680, margin: "0 auto" }}>
@@ -163,11 +72,34 @@ export default function AdminPage() {
         <motion.header
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          style={{ marginBottom: "2.75rem" }}
+          style={{ marginBottom: "2.5rem" }}
         >
-          <p className="tw" style={{ marginBottom: "1rem" }}>
-            Registered mail · addressee only
-          </p>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              gap: "1rem",
+              marginBottom: "1rem",
+            }}
+          >
+            <p className="tw">Registered mail · addressee only</p>
+            <button
+              type="button"
+              onClick={lock}
+              className="tw"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "0.55rem",
+                borderBottom: "1px solid var(--line)",
+                paddingBottom: 2,
+              }}
+            >
+              Lock the box
+            </button>
+          </div>
           <div
             style={{
               display: "flex",
@@ -204,6 +136,40 @@ export default function AdminPage() {
             sealed · {unreadCount} unread
           </p>
         </motion.header>
+
+        {/* On this day */}
+        {onThisDay && (
+          <motion.button
+            type="button"
+            className="otd"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            onClick={() => jumpTo(onThisDay.confession.id)}
+            style={{ marginBottom: "1.6rem" }}
+          >
+            <span
+              className="tw"
+              style={{ display: "block", color: "var(--post-blue)", marginBottom: "0.45rem" }}
+            >
+              ✦ On this day · {formatMonthsAgo(onThisDay.months)} ago
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--serif)",
+                fontStyle: "italic",
+                fontSize: "0.92rem",
+                color: "var(--ink-soft)",
+                display: "block",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              &ldquo;{onThisDay.confession.text.slice(0, 110)}&rdquo;
+            </span>
+          </motion.button>
+        )}
 
         {/* Filters */}
         <motion.div
@@ -270,17 +236,40 @@ export default function AdminPage() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "1.75rem" }}>
             <AnimatePresence>
-              {filtered.map((c) =>
-                isUnlocked(c) ? (
-                  <UnlockedCard key={c.id} confession={c} onMarkRead={handleMarkRead} />
-                ) : (
-                  <LockedCard key={c.id} confession={c} />
-                ),
-              )}
+              {filtered.map((c) => (
+                <div
+                  key={c.id}
+                  id={`letter-${c.id}`}
+                  className={highlightId === c.id ? "card-highlight" : undefined}
+                >
+                  {!isUnlocked(c) ? (
+                    <LockedCard confession={c} />
+                  ) : needsCeremony(c) ? (
+                    <SealedReadyCard confession={c} onUpdate={handleUpdate} />
+                  ) : (
+                    <UnlockedCard confession={c} onUpdate={handleUpdate} />
+                  )}
+                </div>
+              ))}
             </AnimatePresence>
           </div>
         )}
       </div>
     </main>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <PasscodeGate
+      title="The mailbox"
+      subtitle={`These letters are addressed to ${config.readerName} only.`}
+      password={config.readerPassword}
+      storageKey="confession-post-mailbox-auth"
+      postmark={{ ring: "REGISTERED MAIL · ADDRESSEE ONLY · PRIVATE ·", line1: "P.O.", line2: "BOX 2" }}
+      buttonLabel="Unlock the box"
+    >
+      {(lock) => <Mailbox lock={lock} />}
+    </PasscodeGate>
   );
 }

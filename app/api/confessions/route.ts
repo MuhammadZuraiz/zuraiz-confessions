@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { config } from "@/lib/config";
+import { STATIONERY } from "@/lib/stationery";
 
 const IMAGE_PATH_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp)$/i;
+const AUDIO_PATH_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(webm|m4a|mp3|ogg)$/i;
 
 const submissionCooldowns = new Map<string, number>();
 
@@ -102,12 +105,26 @@ export async function POST(request: Request) {
     return jsonError("One of the enclosed photos couldn't be verified.", 400);
   }
 
+  const audioPathValue = formData.get("audioPath");
+  const audioPath = typeof audioPathValue === "string" && audioPathValue ? audioPathValue : null;
+  if (audioPath && !AUDIO_PATH_PATTERN.test(audioPath)) {
+    return jsonError("The voice note couldn't be verified.", 400);
+  }
+
+  const stationeryValue = formData.get("stationery");
+  const stationery = STATIONERY.some((s) => s.id === stationeryValue)
+    ? (stationeryValue as string)
+    : "cream";
+
   const supabase = createClient(supabaseUrl, supabaseAnonKey);
   const image_urls = imagePaths.map((path) => {
     const { data } = supabase.storage.from("confession-images").getPublicUrl(path);
     return data.publicUrl;
   });
   const image_url = image_urls[0] || null;
+  const audio_url = audioPath
+    ? supabase.storage.from("confession-audio").getPublicUrl(audioPath).data.publicUrl
+    : null;
 
   const { error: insertError } = await supabase.from("confessions").insert([
     {
@@ -115,6 +132,8 @@ export async function POST(request: Request) {
       image_url,
       image_urls,
       unlock_date: unlockDate,
+      audio_url,
+      stationery,
     },
   ]);
 

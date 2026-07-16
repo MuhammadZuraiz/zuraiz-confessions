@@ -70,6 +70,10 @@ export default function Home() {
           Hand-made for two · nothing here is public ·{" "}
           <a href="/admin" style={{ borderBottom: "1px solid var(--line)" }}>
             the mailbox
+          </a>{" "}
+          ·{" "}
+          <a href="/sent" style={{ borderBottom: "1px solid var(--line)" }}>
+            your ledger
           </a>
         </p>
       </footer>
