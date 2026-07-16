@@ -1,4 +1,8 @@
-export type Confession = {
+import type { ConfessionMood } from "@/lib/moods";
+
+export type SenderRole = "writer" | "reader";
+
+export type ConfessionRow = {
   id: string;
   text: string;
   image_url: string | null;
@@ -13,6 +17,24 @@ export type Confession = {
   reacted_at?: string | null;
   audio_url?: string | null;
   stationery?: string | null;
+  mood?: ConfessionMood | null;
+  sender_role?: SenderRole | null;
+  reply_to?: string | null;
+  image_paths?: string[] | null;
+  audio_path?: string | null;
+};
+
+export type Confession = Omit<ConfessionRow, "text" | "image_urls"> & {
+  text: string | null;
+  image_urls: string[];
+  mood: ConfessionMood;
+  sender_role: SenderRole;
+  reply_to: string | null;
+  concealed: boolean;
+  image_count: number;
+  has_audio: boolean;
+  has_reply?: boolean;
+  reply?: Confession | null;
 };
 
 export function getConfessionImages(confession: Confession): string[] {
@@ -20,6 +42,10 @@ export function getConfessionImages(confession: Confession): string[] {
     return confession.image_urls;
   }
   return confession.image_url ? [confession.image_url] : [];
+}
+
+export function isAfterDark(confession: Pick<Confession, "mood">): boolean {
+  return confession.mood === "after-dark";
 }
 
 /** A letter is readable once local midnight of its unlock date has passed. */

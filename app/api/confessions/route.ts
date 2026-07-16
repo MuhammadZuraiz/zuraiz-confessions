@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { config } from "@/lib/config";
+import type { Confession, ConfessionRow } from "@/lib/confessions";
+import { isConfessionMood } from "@/lib/moods";
 import { STATIONERY } from "@/lib/stationery";
+import { hasSession } from "@/lib/server/auth";
+import { rowIsUnlocked, serializeConfession } from "@/lib/server/confession-data";
+import { isSameOrigin } from "@/lib/server/request-security";
+import { getSupabaseAdmin, ServerConfigurationError } from "@/lib/server/supabase-admin";
+import { normalizeUnlockDate, validUploadPath } from "@/lib/server/validation";
 
-const IMAGE_PATH_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp)$/i;
-const AUDIO_PATH_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(webm|m4a|mp3|ogg)$/i;
+export const runtime = "nodejs";
 
 const submissionCooldowns = new Map<string, number>();
 
@@ -14,133 +17,128 @@ function jsonError(error: string, status: number, extra?: Record<string, unknown
   return NextResponse.json({ error, ...extra }, { status });
 }
 
-function getRateKey(request: Request) {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip") || "local";
-}
+async function listConfessions(request: Request) {
+  const view = new URL(request.url).searchParams.get("view");
+  const role = view === "mailbox" ? "reader" : view === "sent" ? "writer" : null;
+  if (!role) return jsonError("Choose a valid post view.", 400);
+  if (!(await hasSession(role))) return jsonError("Unlock your private post first.", 401);
 
-function getCooldownSeconds(rateKey: string) {
-  const now = Date.now();
+  const supabase = getSupabaseAdmin();
+  const { data: roots, error } = await supabase
+    .from("confessions")
+    .select("*")
+    .eq("sender_role", "writer")
+    .is("reply_to", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
 
-  if (submissionCooldowns.size > 500) {
-    for (const [key, timestamp] of submissionCooldowns) {
-      if (now - timestamp > config.submitCooldownMs) submissionCooldowns.delete(key);
-    }
+  const rootRows = (roots || []) as ConfessionRow[];
+  const rootIds = rootRows.map((row) => row.id);
+  let replyRows: ConfessionRow[] = [];
+  if (rootIds.length > 0) {
+    const { data: replies, error: replyError } = await supabase
+      .from("confessions")
+      .select("*")
+      .eq("sender_role", "reader")
+      .in("reply_to", rootIds);
+    if (replyError) throw replyError;
+    replyRows = (replies || []) as ConfessionRow[];
   }
 
-  const lastSubmit = submissionCooldowns.get(rateKey) || 0;
-  const remaining = config.submitCooldownMs - (now - lastSubmit);
-  return Math.max(0, Math.ceil(remaining / 1000));
-}
-
-function normalizeUnlockDate(value: FormDataEntryValue | null) {
-  if (typeof value !== "string") return null;
-  const date = value.trim();
-  if (!date) return null;
-
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!match) return "invalid";
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    parsed.getUTCFullYear() !== year ||
-    parsed.getUTCMonth() !== month - 1 ||
-    parsed.getUTCDate() !== day
-  ) {
-    return "invalid";
-  }
-
-  return date;
-}
-
-export async function POST(request: Request) {
-  const rateKey = getRateKey(request);
-  const cooldownSeconds = getCooldownSeconds(rateKey);
-  if (cooldownSeconds > 0) {
-    return jsonError(
-      `The post office needs ${cooldownSeconds}s before your next letter.`,
-      429,
-      { retryAfter: cooldownSeconds },
+  const replyByParent = new Map(replyRows.map((row) => [row.reply_to!, row]));
+  const output: Confession[] = [];
+  for (const row of rootRows) {
+    const replyRow = replyByParent.get(row.id);
+    const reply = view === "sent" && replyRow
+      ? await serializeConfession(replyRow, { forceConcealed: true })
+      : null;
+    const readerCanSeeSealedContent =
+      rowIsUnlocked(row) && (!row.unlock_date || Boolean(row.opened_at));
+    output.push(
+      await serializeConfession(row, {
+        reveal: row.mood !== "after-dark",
+        forceConcealed: view === "mailbox" && !readerCanSeeSealedContent,
+        hasReply: Boolean(replyRow),
+        reply,
+      }),
     );
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return jsonError("The post office isn't configured yet.", 500);
-  }
+  return NextResponse.json(
+    { confessions: output },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
+}
 
-  let formData: FormData;
+export async function GET(request: Request) {
   try {
-    formData = await request.formData();
-  } catch {
-    return jsonError("That letter couldn't be read. Please try again.", 400);
+    return await listConfessions(request);
+  } catch (error) {
+    const message = error instanceof ServerConfigurationError
+      ? "Private storage is not configured yet."
+      : "The post could not be sorted.";
+    return jsonError(message, 503);
+  }
+}
+
+export async function POST(request: Request) {
+  if (!isSameOrigin(request)) return jsonError("That request was not accepted.", 403);
+  if (!(await hasSession("writer"))) return jsonError("Unlock the writing desk first.", 401);
+
+  const now = Date.now();
+  const lastSubmit = submissionCooldowns.get("writer") || 0;
+  const remaining = config.submitCooldownMs - (now - lastSubmit);
+  if (remaining > 0) {
+    return jsonError("The post office needs a moment before your next letter.", 429, {
+      retryAfter: Math.ceil(remaining / 1000),
+    });
   }
 
-  const textValue = formData.get("text");
-  const text = typeof textValue === "string" ? textValue.trim() : "";
-  if (!text) {
-    return jsonError("Write something before you post it.", 400);
-  }
+  const body = await request.json().catch(() => null);
+  const text = typeof body?.text === "string" ? body.text.trim() : "";
+  if (!text || text.length > 20000) return jsonError("Write a valid letter before posting it.", 400);
+  if (!isConfessionMood(body?.mood)) return jsonError("Choose a valid letter mood.", 400);
 
-  const unlockDate = normalizeUnlockDate(formData.get("unlockDate"));
-  if (unlockDate === "invalid") {
-    return jsonError("Please choose a valid seal date.", 400);
-  }
-
-  const imagePathValues = formData.getAll("imagePaths");
-  if (imagePathValues.length > config.maxImages) {
-    return jsonError(`Please enclose up to ${config.maxImages} photos.`, 400);
-  }
-
-  const imagePaths = imagePathValues.filter((value): value is string => typeof value === "string");
-  if (
-    imagePaths.length !== imagePathValues.length ||
-    imagePaths.some((path) => !IMAGE_PATH_PATTERN.test(path))
-  ) {
-    return jsonError("One of the enclosed photos couldn't be verified.", 400);
-  }
-
-  const audioPathValue = formData.get("audioPath");
-  const audioPath = typeof audioPathValue === "string" && audioPathValue ? audioPathValue : null;
-  if (audioPath && !AUDIO_PATH_PATTERN.test(audioPath)) {
-    return jsonError("The voice note couldn't be verified.", 400);
-  }
-
-  const stationeryValue = formData.get("stationery");
-  const stationery = STATIONERY.some((s) => s.id === stationeryValue)
-    ? (stationeryValue as string)
+  const stationery = STATIONERY.some((item) => item.id === body?.stationery)
+    ? body.stationery
     : "cream";
+  const unlockDate = normalizeUnlockDate(body?.unlockDate);
+  if (unlockDate === "invalid") return jsonError("Choose a valid seal date.", 400);
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
-  const image_urls = imagePaths.map((path) => {
-    const { data } = supabase.storage.from("confession-images").getPublicUrl(path);
-    return data.publicUrl;
-  });
-  const image_url = image_urls[0] || null;
-  const audio_url = audioPath
-    ? supabase.storage.from("confession-audio").getPublicUrl(audioPath).data.publicUrl
-    : null;
-
-  const { error: insertError } = await supabase.from("confessions").insert([
-    {
-      text,
-      image_url,
-      image_urls,
-      unlock_date: unlockDate,
-      audio_url,
-      stationery,
-    },
-  ]);
-
-  if (insertError) {
-    return jsonError("Something went wrong. Please try again.", 502);
+  const imagePaths = Array.isArray(body?.imagePaths) ? body.imagePaths : [];
+  if (
+    imagePaths.length > config.maxImages ||
+    imagePaths.some((path: unknown) => !validUploadPath(path, "writer", "image"))
+  ) {
+    return jsonError("One of the enclosed photos could not be verified.", 400);
+  }
+  const audioPath = body?.audioPath || null;
+  if (audioPath && !validUploadPath(audioPath, "writer", "audio")) {
+    return jsonError("The voice note could not be verified.", 400);
   }
 
-  submissionCooldowns.set(rateKey, Date.now());
-  return NextResponse.json({ ok: true });
+  try {
+    const supabase = getSupabaseAdmin();
+    const { error } = await supabase.from("confessions").insert({
+      text,
+      image_url: null,
+      image_urls: [],
+      image_paths: imagePaths,
+      audio_url: null,
+      audio_path: audioPath,
+      unlock_date: unlockDate,
+      stationery,
+      mood: body.mood,
+      sender_role: "writer",
+      reply_to: null,
+    });
+    if (error) throw error;
+    submissionCooldowns.set("writer", now);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof ServerConfigurationError
+      ? "Private storage is not configured yet."
+      : "The letter could not be posted.";
+    return jsonError(message, 503);
+  }
 }

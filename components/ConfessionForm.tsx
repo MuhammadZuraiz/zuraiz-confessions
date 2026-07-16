@@ -1,121 +1,107 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { supabase } from "@/lib/supabase";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { config } from "@/lib/config";
 import { formatLongDate } from "@/lib/confessions";
+import { getMood, type ConfessionMood } from "@/lib/moods";
+import { makePrivatePhoto } from "@/lib/photo-privacy";
+import { privateJson, uploadPrivateEnclosure } from "@/lib/private-api";
 import { getStationery, type StationeryId } from "@/lib/stationery";
+import MoodPicker from "@/components/MoodPicker";
 import StationeryPicker from "@/components/StationeryPicker";
 import VoiceRecorder, { type RecordedAudio } from "@/components/VoiceRecorder";
 
 const MAX_IMAGE_BYTES = config.maxImageMb * 1024 * 1024;
 const COOLDOWN_KEY = "confession-post-last-submit";
-const DRAFT_KEY = "confession-post-draft";
+const DRAFT_KEY = "confession-post-draft-v2";
 const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const IMAGE_EXTENSIONS: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
 
-type SelectedImage = {
-  id: string;
-  file: File;
-  preview: string;
-};
+type SelectedImage = { id: string; file: File; preview: string };
 
-function getCooldownSeconds() {
-  const lastSubmit = Number(window.localStorage.getItem(COOLDOWN_KEY) || "0");
-  const remaining = config.submitCooldownMs - (Date.now() - lastSubmit);
-  return Math.max(0, Math.ceil(remaining / 1000));
-}
-
-function capitalize(word: string) {
-  return word.charAt(0).toUpperCase() + word.slice(1);
+function cooldownSeconds() {
+  try {
+    const last = Number(window.localStorage.getItem(COOLDOWN_KEY) || "0");
+    return Math.max(0, Math.ceil((config.submitCooldownMs - (Date.now() - last)) / 1000));
+  } catch {
+    return 0;
+  }
 }
 
 export default function ConfessionForm() {
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<SelectedImage[]>([]);
-  const [unlockDate, setUnlockDate] = useState("");
+  const [mood, setMood] = useState<ConfessionMood>("tender");
   const [stationery, setStationery] = useState<StationeryId>("cream");
+  const [text, setText] = useState("");
+  const [unlockDate, setUnlockDate] = useState("");
+  const [images, setImages] = useState<SelectedImage[]>([]);
   const [audio, setAudio] = useState<RecordedAudio | null>(null);
-  const [draftRestored, setDraftRestored] = useState(false);
+  const [processingPhotos, setProcessingPhotos] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  // Remembered at submit time so the success stamp can still name the seal
-  // date after the field is cleared.
   const [sealedUntil, setSealedUntil] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<SelectedImage[]>([]);
-  const shouldReduceMotion = useReducedMotion();
+  const reduceMotion = useReducedMotion();
+
+  useEffect(() => { imagesRef.current = images; }, [images]);
+  useEffect(() => () => imagesRef.current.forEach((image) => URL.revokeObjectURL(image.preview)), []);
 
   useEffect(() => {
-    imagesRef.current = images;
-  }, [images]);
-
-  // Restore an unsent draft (text, seal date, stationery) on mount.
-  useEffect(() => {
-    let cancelled = false;
+    let active = true;
     queueMicrotask(() => {
-      if (cancelled) return;
+      if (!active) return;
       try {
+        window.localStorage.removeItem("confession-post-draft");
         const raw = window.localStorage.getItem(DRAFT_KEY);
         if (!raw) return;
-        const draft = JSON.parse(raw) as {
-          text?: string;
-          unlockDate?: string;
-          stationery?: string;
-          savedAt?: number;
-        };
-        if (!draft.text?.trim() || !draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) {
+        const draft = JSON.parse(raw) as { text?: string; unlockDate?: string; stationery?: StationeryId; mood?: ConfessionMood; savedAt?: number };
+        if (!draft.text?.trim() || !draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS || draft.mood === "after-dark") {
           window.localStorage.removeItem(DRAFT_KEY);
           return;
         }
+        const restoredMood = draft.mood === "flirty" ? "flirty" : "tender";
         setText(draft.text);
+        setMood(restoredMood);
+        if (draft.stationery) setStationery(draft.stationery);
         const today = new Date().toISOString().split("T")[0];
         if (draft.unlockDate && draft.unlockDate >= today) setUnlockDate(draft.unlockDate);
-        if (["cream", "rose", "midnight"].includes(draft.stationery ?? "")) {
-          setStationery(draft.stationery as StationeryId);
-        }
         setDraftRestored(true);
         window.setTimeout(() => setDraftRestored(false), 5000);
       } catch {
         window.localStorage.removeItem(DRAFT_KEY);
       }
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => { active = false; };
   }, []);
 
-  // Autosave the draft (debounced) so a half-written letter survives a closed tab.
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (submitting) return;
-      if (!text.trim()) {
-        window.localStorage.removeItem(DRAFT_KEY);
-        return;
+    const timer = window.setTimeout(() => {
+      try {
+        if (mood === "after-dark" || submitting || !text.trim()) {
+          window.localStorage.removeItem(DRAFT_KEY);
+          return;
+        }
+        window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ text, unlockDate, stationery, mood, savedAt: Date.now() }));
+      } catch {
+        // Draft saving is convenience only; posting still works without browser storage.
       }
-      window.localStorage.setItem(
-        DRAFT_KEY,
-        JSON.stringify({ text, unlockDate, stationery, savedAt: Date.now() }),
-      );
     }, 500);
-    return () => clearTimeout(timer);
-  }, [text, unlockDate, stationery, submitting]);
+    return () => window.clearTimeout(timer);
+  }, [text, unlockDate, stationery, mood, submitting]);
 
-  useEffect(
-    () => () => {
-      imagesRef.current.forEach(({ preview }) => URL.revokeObjectURL(preview));
-    },
-    [],
-  );
+  const changeMood = (next: ConfessionMood) => {
+    setMood(next);
+    setStationery(getMood(next).defaultStationery);
+    if (next === "after-dark") {
+      setDraftRestored(false);
+      try { window.localStorage.removeItem(DRAFT_KEY); } catch {}
+    }
+  };
 
   const clearImages = () => {
-    images.forEach(({ preview }) => URL.revokeObjectURL(preview));
+    images.forEach((image) => URL.revokeObjectURL(image.preview));
     setImages([]);
     if (fileRef.current) fileRef.current.value = "";
   };
@@ -126,432 +112,163 @@ export default function ConfessionForm() {
       if (removed) URL.revokeObjectURL(removed.preview);
       return current.filter((image) => image.id !== id);
     });
-    if (fileRef.current) fileRef.current.value = "";
   };
 
-  const handleImages = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
-    if (files.length === 0) return;
+  const chooseImages = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = "";
+    if (!files.length) return;
     setError(null);
-
     if (images.length + files.length > config.maxImages) {
       setError(`You can enclose up to ${config.maxImages} photos.`);
       return;
     }
-
-    if (files.some((file) => !IMAGE_EXTENSIONS[file.type])) {
-      setError("Please choose a JPG, PNG, or WebP photo.");
-      return;
-    }
-
     if (files.some((file) => file.size > MAX_IMAGE_BYTES)) {
-      setError(`Please keep each photo under ${config.maxImageMb} MB.`);
+      setError(`Please keep each original photo under ${config.maxImageMb} MB.`);
       return;
     }
 
-    setImages((current) => [
-      ...current,
-      ...files.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        preview: URL.createObjectURL(file),
-      })),
-    ]);
+    setProcessingPhotos(true);
+    const processed: SelectedImage[] = [];
+    try {
+      for (const file of files) {
+        const privateFile = await makePrivatePhoto(file);
+        if (privateFile.size > MAX_IMAGE_BYTES) {
+          throw new Error(`A re-encoded photo exceeds ${config.maxImageMb} MB.`);
+        }
+        processed.push({ id: crypto.randomUUID(), file: privateFile, preview: URL.createObjectURL(privateFile) });
+      }
+      setImages((current) => [...current, ...processed]);
+    } catch (caught) {
+      processed.forEach((image) => URL.revokeObjectURL(image.preview));
+      setError(caught instanceof Error ? caught.message : "A photo could not be privately processed.");
+    } finally {
+      setProcessingPhotos(false);
+    }
   };
 
-  const handleSubmit = async () => {
-    const trimmedText = text.trim();
-    if (!trimmedText || submitting) return;
-
-    const cooldownSeconds = getCooldownSeconds();
-    if (cooldownSeconds > 0) {
-      setError(`The post office needs ${cooldownSeconds}s before your next letter.`);
+  const submit = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || submitting || processingPhotos) return;
+    const remaining = cooldownSeconds();
+    if (remaining) {
+      setError(`The post office needs ${remaining}s before your next letter.`);
       return;
     }
-
-    if (images.length > config.maxImages) {
-      setError(`You can enclose up to ${config.maxImages} photos.`);
-      return;
-    }
-
-    if (images.some(({ file }) => !IMAGE_EXTENSIONS[file.type] || file.size > MAX_IMAGE_BYTES)) {
-      setError(`Please choose a JPG, PNG, or WebP photo under ${config.maxImageMb} MB.`);
-      return;
-    }
-
     setSubmitting(true);
     setError(null);
 
-    const imagePaths: string[] = [];
-    for (const { file } of images) {
-      const ext = IMAGE_EXTENSIONS[file.type];
-      const path = `${crypto.randomUUID()}.${ext}`;
-      const { error: uploadError } = await supabase.storage
-        .from("confession-images")
-        .upload(path, file, {
-          cacheControl: "3600",
-          contentType: file.type,
-          upsert: false,
-        });
-
-      if (uploadError) {
-        setError("A photo failed to upload. Try again, or post without it.");
-        setSubmitting(false);
-        return;
-      }
-
-      imagePaths.push(path);
-    }
-
-    let audioPath: string | null = null;
-    if (audio) {
-      const path = `${crypto.randomUUID()}.${audio.ext}`;
-      const { error: audioError } = await supabase.storage
-        .from("confession-audio")
-        .upload(path, audio.blob, {
-          cacheControl: "3600",
-          contentType: audio.contentType,
-          upsert: false,
-        });
-
-      if (audioError) {
-        setError("The voice note failed to upload. Try again, or post without it.");
-        setSubmitting(false);
-        return;
-      }
-
-      audioPath = path;
-    }
-
-    const formData = new FormData();
-    formData.set("text", trimmedText);
-    if (unlockDate) formData.set("unlockDate", unlockDate);
-    formData.set("stationery", stationery);
-    if (audioPath) formData.set("audioPath", audioPath);
-    imagePaths.forEach((path) => formData.append("imagePaths", path));
-
-    let response: Response;
     try {
-      response = await fetch("/api/confessions", {
+      const imagePaths: string[] = [];
+      for (const image of images) {
+        imagePaths.push(await uploadPrivateEnclosure({ role: "writer", kind: "image", data: image.file, contentType: "image/webp" }));
+      }
+      const audioPath = audio
+        ? await uploadPrivateEnclosure({ role: "writer", kind: "audio", data: audio.blob, contentType: audio.contentType })
+        : null;
+
+      await privateJson("/api/confessions", {
         method: "POST",
-        body: formData,
+        body: JSON.stringify({ text: trimmed, mood, stationery, unlockDate: unlockDate || null, imagePaths, audioPath }),
       });
-    } catch {
-      setError("The post office could not be reached. Please try again.");
-      setSubmitting(false);
-      return;
-    }
-    const result = await response.json().catch(() => null);
 
-    if (!response.ok) {
-      setError(result?.error || "Something went wrong. Please try again.");
-      setSubmitting(false);
-      return;
-    }
-
-    setSealedUntil(unlockDate || null);
-    setText("");
-    clearImages();
-    setUnlockDate("");
-    if (audio) {
-      URL.revokeObjectURL(audio.url);
+      setSealedUntil(unlockDate || null);
+      setText("");
+      clearImages();
+      setUnlockDate("");
+      if (audio) URL.revokeObjectURL(audio.url);
       setAudio(null);
+      try {
+        window.localStorage.removeItem(DRAFT_KEY);
+        window.localStorage.setItem(COOLDOWN_KEY, String(Date.now()));
+      } catch {}
+      setSubmitted(true);
+      window.setTimeout(() => setSubmitted(false), 5000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The letter could not be posted.");
+    } finally {
+      setSubmitting(false);
     }
-    window.localStorage.removeItem(DRAFT_KEY);
-    window.localStorage.setItem(COOLDOWN_KEY, String(Date.now()));
-    setSubmitted(true);
-    setSubmitting(false);
-    setTimeout(() => setSubmitted(false), 5000);
   };
 
-  const canSubmit = !submitting && text.trim().length > 0;
-  const todayStr = new Date().toISOString().split("T")[0];
+  const moodInfo = getMood(mood);
+  const today = new Date().toISOString().split("T")[0];
+  const busy = submitting || processingPhotos;
 
   return (
     <div style={{ position: "relative" }}>
-      <div className="airmail" />
-      <div
-        className={`sheet ${getStationery(stationery).className}`.trim()}
-        style={{
-          borderRadius: "0 0 6px 6px",
-          padding: "clamp(1.5rem, 4.5vw, 2.75rem)",
-          transition: "background 0.5s ease, border-color 0.5s ease",
-        }}
-      >
-        {/* Decorative postage stamp */}
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            top: 20,
-            right: 20,
-            width: 58,
-            height: 70,
-            background: "#fff",
-            border: "1px solid var(--line)",
-            boxShadow: "0 4px 10px rgba(42,51,80,0.12)",
-            transform: "rotate(3.5deg)",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 4,
-            padding: 4,
-          }}
-        >
-          <div style={{ position: "absolute", inset: 4, border: "1px solid rgba(42,51,80,0.14)" }} />
-          <span style={{ color: "var(--wax)", fontSize: "1.15rem", lineHeight: 1 }}>♥</span>
-          <span className="tw" style={{ fontSize: "0.42rem", letterSpacing: "0.18em" }}>
-            Forever
-          </span>
-        </div>
+      <div className={`airmail${mood === "after-dark" ? " airmail--private" : ""}`} />
+      <div className={`sheet ${getStationery(stationery).className} letter-compose letter-compose--${mood}`.trim()}>
+        <motion.div animate={{ opacity: submitted ? 0.2 : 1 }}>
+          <section className="compose-section">
+            <span className="tw field-label">Set the mood</span>
+            <MoodPicker value={mood} onChange={changeMood} disabled={busy} />
+          </section>
 
-        {/* Dim the letter while the success stamp is pressed */}
-        <motion.div animate={{ opacity: submitted ? 0.22 : 1 }} transition={{ duration: 0.35 }}>
-          {/* Stationery */}
-          <div style={{ marginBottom: "1.9rem", paddingRight: 64 }}>
+          <section className="compose-section">
             <span className="tw field-label">Stationery</span>
-            <StationeryPicker value={stationery} onChange={setStationery} disabled={submitting} />
-          </div>
+            <StationeryPicker value={stationery} onChange={setStationery} disabled={busy} />
+          </section>
 
-          {/* The confession */}
-          <div style={{ marginBottom: "2.1rem" }}>
-            <label htmlFor="confession-text" className="tw field-label">
-              The confession
-            </label>
+          {mood === "after-dark" && (
+            <div className="private-notice" role="note">
+              <strong>Private enclosure</strong>
+              <span>This letter stays only in this tab until posted. No local draft is saved.</span>
+            </div>
+          )}
+
+          <section className="compose-section">
+            <label htmlFor="confession-text" className="tw field-label">The confession</label>
             <AnimatePresence>
-              {draftRestored && (
-                <motion.p
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  style={{
-                    fontFamily: "var(--serif)",
-                    fontStyle: "italic",
-                    fontSize: "0.8rem",
-                    color: "var(--ink-faint)",
-                    marginBottom: "0.6rem",
-                  }}
-                >
-                  Your unsent draft was restored. ✎
-                </motion.p>
-              )}
+              {draftRestored && <motion.p className="draft-note" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>Your unsent draft was restored. ✎</motion.p>}
             </AnimatePresence>
-            <textarea
-              id="confession-text"
-              className="letter-input"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Dear you — here's what I never said…"
-              rows={7}
-              disabled={submitting}
-            />
-          </div>
+            <textarea id="confession-text" className="letter-input" value={text} onChange={(event) => setText(event.target.value)}
+              placeholder={mood === "after-dark" ? "For your eyes only…" : "Dear you — here's what I never said…"}
+              rows={7} disabled={busy} maxLength={20000} />
+          </section>
 
-          {/* Seal date */}
-          <div style={{ marginBottom: "2.1rem" }}>
-            <label htmlFor="confession-seal" className="tw field-label">
-              Seal until{" "}
-              <span className="field-hint">(optional — leave blank to deliver right away)</span>
-            </label>
-            <input
-              id="confession-seal"
-              type="date"
-              className="date-input"
-              value={unlockDate}
-              min={todayStr}
-              onChange={(e) => setUnlockDate(e.target.value)}
-              disabled={submitting}
-            />
-            <AnimatePresence>
-              {unlockDate && (
-                <motion.p
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  style={{
-                    marginTop: "0.65rem",
-                    fontFamily: "var(--serif)",
-                    fontStyle: "italic",
-                    fontSize: "0.85rem",
-                    color: "var(--wax)",
-                  }}
-                >
-                  {capitalize(config.pronoun.subject)} won&rsquo;t be able to open this until{" "}
-                  {formatLongDate(unlockDate)}.
-                </motion.p>
-              )}
-            </AnimatePresence>
-          </div>
+          <section className="compose-section">
+            <label htmlFor="confession-seal" className="tw field-label">Seal until <span className="field-hint">(optional)</span></label>
+            <input id="confession-seal" type="date" className="date-input" value={unlockDate} min={today}
+              onChange={(event) => setUnlockDate(event.target.value)} disabled={busy} />
+            {unlockDate && <p className="seal-note">{config.readerName} can break the seal on {formatLongDate(unlockDate)}.</p>}
+          </section>
 
-          {/* Photos */}
-          <div style={{ marginBottom: "2.1rem" }}>
-            <span className="tw field-label">
-              Enclose photos{" "}
-              <span className="field-hint">(optional — up to {config.maxImages})</span>
-            </span>
+          <section className="compose-section">
+            <span className="tw field-label">Enclose photos <span className="field-hint">(optional — metadata removed)</span></span>
+            {images.length > 0 && <div className="compose-photos">
+              {images.map((image, index) => <div className="snapshot" key={image.id} style={{ rotate: index % 2 ? "1.5deg" : "-1.5deg" }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.preview} alt={`Enclosed photo ${index + 1}`} />
+                <button type="button" className="remove" onClick={() => removeImage(image.id)} aria-label={`Remove photo ${index + 1}`}>✕</button>
+              </div>)}
+            </div>}
+            {images.length < config.maxImages && <button type="button" className="btn-enclose" onClick={() => fileRef.current?.click()} disabled={busy}>
+              + {processingPhotos ? "removing private metadata…" : images.length ? "enclose another" : "enclose photos"}
+            </button>}
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={chooseImages} hidden />
+          </section>
 
-            {images.length > 0 && (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-                  gap: "1rem",
-                  marginBottom: images.length < config.maxImages ? "1rem" : 0,
-                  padding: "0.4rem 0.2rem",
-                }}
-              >
-                <AnimatePresence>
-                  {images.map(({ id, preview }, index) => (
-                    <motion.div
-                      key={id}
-                      className="snapshot"
-                      initial={{ opacity: 0, scale: 0.94 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.94 }}
-                      style={{ rotate: index % 2 === 0 ? -1.6 : 1.8 }}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={preview} alt={`Enclosed photo ${index + 1}`} />
-                      <button
-                        type="button"
-                        className="remove"
-                        aria-label={`Remove enclosed photo ${index + 1}`}
-                        onClick={() => removeImage(id)}
-                      >
-                        ✕
-                      </button>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              </div>
-            )}
+          <section className="compose-section">
+            <span className="tw field-label">Add your voice <span className="field-hint">(optional)</span></span>
+            <VoiceRecorder value={audio} onChange={setAudio} disabled={busy} />
+          </section>
 
-            {images.length < config.maxImages && (
-              <button
-                type="button"
-                className="btn-enclose"
-                onClick={() => fileRef.current?.click()}
-                disabled={submitting}
-              >
-                <span style={{ fontSize: "0.9rem", lineHeight: 1 }}>+</span>
-                {images.length > 0 ? "enclose another" : "enclose photos"}
-              </button>
-            )}
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              onChange={handleImages}
-              style={{ display: "none" }}
-            />
-          </div>
+          {error && <p className="form-error" role="alert">{error}</p>}
 
-          {/* Voice note */}
-          <div style={{ marginBottom: "2.1rem" }}>
-            <span className="tw field-label">
-              Add your voice <span className="field-hint">(optional)</span>
-            </span>
-            <VoiceRecorder value={audio} onChange={setAudio} disabled={submitting} />
-          </div>
-
-          {/* Error */}
-          <AnimatePresence>
-            {error && (
-              <motion.p
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                style={{
-                  fontFamily: "var(--serif)",
-                  fontStyle: "italic",
-                  fontSize: "0.85rem",
-                  color: "var(--wax)",
-                  marginBottom: "1.2rem",
-                }}
-              >
-                {error}
-              </motion.p>
-            )}
-          </AnimatePresence>
-
-          {/* Post it */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "1rem",
-              borderTop: "1px solid var(--rule)",
-              paddingTop: "1.5rem",
-            }}
-          >
-            <span className="tw" style={{ fontSize: "0.55rem" }}>
-              {unlockDate ? "Wax seal will be applied" : "First-class delivery"}
-            </span>
-            <motion.button
-              type="button"
-              className="btn-wax"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              whileHover={canSubmit && !shouldReduceMotion ? { scale: 1.03 } : {}}
-              whileTap={canSubmit && !shouldReduceMotion ? { scale: 0.96 } : {}}
-            >
+          <div className="compose-submit">
+            <span className="tw">{moodInfo.label} post · {unlockDate ? "wax sealed" : "first class"}</span>
+            <motion.button type="button" className="btn-wax" onClick={submit} disabled={busy || !text.trim()}
+              whileHover={!reduceMotion ? { scale: 1.03 } : {}} whileTap={!reduceMotion ? { scale: 0.97 } : {}}>
               {submitting ? "Sealing…" : unlockDate ? "Seal & post" : "Post the letter"}
             </motion.button>
           </div>
         </motion.div>
 
-        {/* Success stamp */}
         <AnimatePresence>
-          {submitted && (
-            <motion.div
-              key="stamp"
-              initial={{ opacity: 0, scale: shouldReduceMotion ? 1 : 1.7 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ type: "spring", stiffness: 320, damping: 22 }}
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "grid",
-                placeItems: "center",
-                pointerEvents: "none",
-              }}
-            >
-              <div
-                className="stamp-red"
-                style={{
-                  fontSize: "0.85rem",
-                  letterSpacing: "0.3em",
-                  padding: "1rem 1.6rem 0.9rem",
-                  border: "3px double var(--wax)",
-                  borderRadius: 6,
-                  transform: "rotate(-8deg)",
-                  background: "transparent",
-                  textAlign: "center",
-                }}
-              >
-                {sealedUntil ? (
-                  <>
-                    Sealed
-                    <span style={{ display: "block", fontSize: "0.6rem", marginTop: 6 }}>
-                      Opens {formatLongDate(sealedUntil)}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Delivered
-                    <span style={{ display: "block", fontSize: "0.6rem", marginTop: 6 }}>
-                      First class
-                    </span>
-                  </>
-                )}
-              </div>
-            </motion.div>
-          )}
+          {submitted && <motion.div className="success-stamp" initial={{ opacity: 0, scale: reduceMotion ? 1 : 1.6 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
+            <div className="stamp-red">{sealedUntil ? <>Sealed<span>Opens {formatLongDate(sealedUntil)}</span></> : <>Delivered<span>{moodInfo.label} post</span></>}</div>
+          </motion.div>}
         </AnimatePresence>
       </div>
     </div>

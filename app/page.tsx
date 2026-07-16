@@ -1,82 +1,37 @@
+"use client";
+
 import ConfessionForm from "@/components/ConfessionForm";
+import PasscodeGate from "@/components/PasscodeGate";
 import Postmark from "@/components/Postmark";
+import { config } from "@/lib/config";
+
+function WritingDesk({ lock }: { lock: () => Promise<void> }) {
+  return (
+    <main className="writing-desk">
+      <header className="writing-header">
+        <div className="desk-nav tw">
+          <span>Private correspondence · one reader only</span>
+          <button type="button" onClick={lock}>Lock the desk</button>
+        </div>
+        <div className="rise writing-postmark"><Postmark size={98} style={{ color: "var(--ink)", opacity: 0.55, transform: "rotate(-8deg)" }} /></div>
+        <h1 className="rise rise-2">Say it in a <em>letter</em><span>.</span></h1>
+        <p className="rise rise-3">Soft, teasing, or for her eyes only.<br />Post it now, or seal it until a day you choose.</p>
+      </header>
+      <div className="rise rise-4 writing-letter"><ConfessionForm /></div>
+      <footer className="writing-footer">
+        <div className="airmail" />
+        <p className="tw">Made for two · private by design · <a href="/admin">the mailbox</a> · <a href="/sent">your ledger</a></p>
+      </footer>
+    </main>
+  );
+}
 
 export default function Home() {
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        padding: "clamp(3rem, 8vh, 5.5rem) 1.25rem 6rem",
-      }}
-    >
-      {/* Header */}
-      <header style={{ textAlign: "center", maxWidth: 640, marginBottom: "clamp(2.5rem, 6vw, 3.75rem)" }}>
-        <div className="rise" style={{ display: "flex", justifyContent: "center", marginBottom: "1.6rem" }}>
-          <Postmark
-            size={98}
-            style={{ color: "var(--ink)", opacity: 0.55, transform: "rotate(-8deg)" }}
-          />
-        </div>
-
-        <p className="tw rise rise-1" style={{ marginBottom: "1.3rem" }}>
-          Private correspondence · one reader only
-        </p>
-
-        <h1
-          className="rise rise-2"
-          style={{
-            fontFamily: "var(--serif)",
-            fontWeight: 300,
-            fontSize: "clamp(2.7rem, 8vw, 4.4rem)",
-            lineHeight: 1.08,
-            letterSpacing: "-0.01em",
-            color: "var(--ink-strong)",
-            marginBottom: "1.1rem",
-          }}
-        >
-          Say it in a{" "}
-          <em style={{ fontStyle: "italic", fontWeight: 400 }}>letter</em>
-          <span style={{ color: "var(--wax)" }}>.</span>
-        </h1>
-
-        <p
-          className="rise rise-3"
-          style={{
-            fontFamily: "var(--serif)",
-            fontStyle: "italic",
-            fontSize: "clamp(1rem, 2.4vw, 1.15rem)",
-            lineHeight: 1.65,
-            color: "var(--ink-soft)",
-          }}
-        >
-          Whatever you can&rsquo;t say out loud — write it down.
-          <br />
-          Post it now, or seal it until a day you choose.
-        </p>
-      </header>
-
-      {/* The letter */}
-      <div className="rise rise-4" style={{ width: "100%", maxWidth: 640 }}>
-        <ConfessionForm />
-      </div>
-
-      {/* Footer */}
-      <footer style={{ width: "100%", maxWidth: 640, marginTop: "4rem", textAlign: "center" }}>
-        <div className="airmail" style={{ borderRadius: 2, marginBottom: "1.2rem", opacity: 0.5 }} />
-        <p className="tw" style={{ fontSize: "0.56rem" }}>
-          Hand-made for two · nothing here is public ·{" "}
-          <a href="/admin" style={{ borderBottom: "1px solid var(--line)" }}>
-            the mailbox
-          </a>{" "}
-          ·{" "}
-          <a href="/sent" style={{ borderBottom: "1px solid var(--line)" }}>
-            your ledger
-          </a>
-        </p>
-      </footer>
-    </main>
+    <PasscodeGate role="writer" title="The writing desk" subtitle={`Only ${config.writerName} can enter this private desk.`}
+      postmark={{ ring: "PRIVATE POST · WRITER ONLY · SEALED ·", line1: "WRITE", line2: "IN PRIVATE", color: "var(--post-blue)" }}
+      buttonLabel="Unlock the desk">
+      {(lock) => <WritingDesk lock={lock} />}
+    </PasscodeGate>
   );
 }

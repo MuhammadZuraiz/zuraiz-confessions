@@ -3,199 +3,104 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { supabase } from "@/lib/supabase";
-import { config, getReaction } from "@/lib/config";
-import { getStationery } from "@/lib/stationery";
-import {
-  getConfessionImages,
-  isUnlocked,
-  type Confession,
-} from "@/lib/confessions";
 import PasscodeGate from "@/components/PasscodeGate";
+import PrivateSleeve from "@/components/PrivateSleeve";
+import ReturnPostBody from "@/components/ReturnPostBody";
+import { config, getReaction } from "@/lib/config";
+import { isAfterDark, isUnlocked, type Confession } from "@/lib/confessions";
+import { getMood } from "@/lib/moods";
+import { privateJson } from "@/lib/private-api";
+import { getStationery } from "@/lib/stationery";
 
-function formatDate(value: string) {
-  return new Date(value).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+function date(value: string) {
+  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function formatSealDate(value: string) {
-  return new Date(`${value}T00:00:00`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+function cover(confession: Confession): Confession {
+  return { ...confession, text: null, image_url: null, image_urls: [], audio_url: null, concealed: true };
 }
 
-function StatusStep({ children, active = true }: { children: React.ReactNode; active?: boolean }) {
-  return <span className={`ledger-status${active ? " ledger-status--active" : ""}`}>{children}</span>;
-}
-
-function SentCard({ confession, index }: { confession: Confession; index: number }) {
+function SentCard({ confession, index, onChange }: { confession: Confession; index: number; onChange: (next: Confession) => void }) {
   const stationery = getStationery(confession.stationery);
+  const mood = getMood(confession.mood);
   const reaction = getReaction(confession.reaction);
-  const photos = getConfessionImages(confession).length;
   const unlocked = isUnlocked(confession);
+  const mergeRoot = (revealed: Confession) => onChange({ ...confession, ...revealed, has_reply: confession.has_reply, reply: confession.reply });
+  const updateReply = (next: Confession) => onChange({ ...confession, reply: { ...confession.reply!, ...next } });
 
   return (
-    <motion.article
-      className={`sheet sent-card ${stationery.className}`.trim()}
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.45, delay: Math.min(index * 0.05, 0.3) }}
-    >
-      <div className="sent-card__topline">
-        <p className="tw">Posted {formatDate(confession.created_at)}</p>
-        <span className="ledger-stationery">{stationery.label}</span>
+    <motion.article className={`sheet sent-card ${stationery.className} sent-card--${confession.mood}`.trim()} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index * 0.05, 0.3) }}>
+      <div className="sent-card__topline"><p className="tw">Posted {date(confession.created_at)}</p><span className={`mood-stamp mood-stamp--${confession.mood}`}>{mood.label}</span></div>
+      <div className="ledger-trail"><span className="ledger-status ledger-status--active">Delivered</span>
+        {confession.unlock_date && !unlocked && <><span className="ledger-arrow">→</span><span className="ledger-status">Sealed until {date(`${confession.unlock_date}T00:00:00`)}</span></>}
+        {confession.opened_at && <><span className="ledger-arrow">→</span><span className="ledger-status ledger-status--active">Opened {date(confession.opened_at)}</span></>}
+        {confession.is_read && <><span className="ledger-arrow">→</span><span className="ledger-status ledger-status--active">Read ✓</span></>}
       </div>
 
-      <div className="ledger-trail" aria-label="Letter status">
-        <StatusStep>Delivered</StatusStep>
+      {confession.concealed ? <PrivateSleeve confession={confession} role="writer" onReveal={mergeRoot} />
+        : <div className="sent-content"><p className="sent-excerpt">&ldquo;{confession.text}&rdquo;</p>
+          <p className="tw sent-card__contents">{confession.image_count ? `${confession.image_count} photo${confession.image_count === 1 ? "" : "s"}` : "letter"}{confession.has_audio ? " · voice note ♫" : ""}</p>
+          {isAfterDark(confession) && <button type="button" className="btn-private" onClick={() => onChange(cover(confession))}>Cover</button>}
+        </div>}
 
-        {confession.unlock_date && !unlocked && (
-          <>
-            <span className="ledger-arrow" aria-hidden="true">→</span>
-            <StatusStep active={false}>Sealed until {formatSealDate(confession.unlock_date)}</StatusStep>
-          </>
-        )}
+      {reaction && <div className="ledger-reaction"><span className="ledger-reaction__seal">{reaction.glyph}</span><span><strong>She pressed her seal</strong><small>{reaction.label}{confession.reacted_at ? ` · ${date(confession.reacted_at)}` : ""}</small></span></div>}
 
-        {confession.unlock_date && unlocked && !confession.opened_at && (
-          <>
-            <span className="ledger-arrow" aria-hidden="true">→</span>
-            <StatusStep active={false}>Waiting for her seal</StatusStep>
-          </>
-        )}
-
-        {confession.opened_at && (
-          <>
-            <span className="ledger-arrow" aria-hidden="true">→</span>
-            <StatusStep>Opened {formatDate(confession.opened_at)}</StatusStep>
-          </>
-        )}
-
-        {confession.is_read && (
-          <>
-            <span className="ledger-arrow" aria-hidden="true">→</span>
-            <StatusStep>Read ✓</StatusStep>
-          </>
-        )}
-      </div>
-
-      <p className="sent-excerpt">&ldquo;{confession.text}&rdquo;</p>
-
-      <div className="sent-card__footer">
-        <p className="tw sent-card__contents">
-          {photos > 0 && `${photos} ${photos === 1 ? "photo" : "photos"}`}
-          {photos > 0 && confession.audio_url && " · "}
-          {confession.audio_url && "voice note ♫"}
-          {photos === 0 && !confession.audio_url && "letter only"}
-        </p>
-
-        {reaction && (
-          <div className="ledger-reaction">
-            <span className="ledger-reaction__seal" aria-hidden="true">{reaction.glyph}</span>
-            <span>
-              <strong>She pressed her seal</strong>
-              <small>
-                {reaction.label}
-                {confession.reacted_at ? ` · ${formatDate(confession.reacted_at)}` : ""}
-              </small>
-            </span>
-          </div>
-        )}
-      </div>
+      {confession.reply && <div className="ledger-return">
+        {!confession.reply.is_read && <span className="stamp-red ledger-return__new">Unread return post</span>}
+        {confession.reply.concealed ? <PrivateSleeve confession={confession.reply} role="writer" onReveal={updateReply} returnPost />
+          : <ReturnPostBody confession={confession.reply} onCover={isAfterDark(confession.reply) ? () => updateReply(cover(confession.reply!)) : undefined} />}
+      </div>}
     </motion.article>
   );
 }
 
-function SentLedger({ lock }: { lock: () => void }) {
+function SentLedger({ lock }: { lock: () => Promise<void> }) {
   const [confessions, setConfessions] = useState<Confession[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchConfessions = async () => {
-      const { data, error } = await supabase
-        .from("confessions")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (data) setConfessions(data);
-      setLoadError(Boolean(error));
-      setLoading(false);
-    };
-    fetchConfessions();
+    let active = true;
+    privateJson<{ confessions: Confession[] }>("/api/confessions?view=sent")
+      .then((result) => active && setConfessions(result.confessions))
+      .catch((caught: Error) => active && setError(caught.message))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, []);
 
-  const openedCount = confessions.filter((c) => Boolean(c.opened_at)).length;
-  const readCount = confessions.filter((c) => c.is_read).length;
-  const reactionCount = confessions.filter((c) => Boolean(c.reaction)).length;
+  useEffect(() => {
+    const coverPrivate = () => setConfessions((current) => current.map((item) => ({
+      ...(isAfterDark(item) ? cover(item) : item),
+      reply: item.reply && isAfterDark(item.reply) ? cover(item.reply) : item.reply,
+    })));
+    const visibility = () => { if (document.hidden) coverPrivate(); };
+    window.addEventListener("blur", coverPrivate);
+    document.addEventListener("visibilitychange", visibility);
+    return () => { window.removeEventListener("blur", coverPrivate); document.removeEventListener("visibilitychange", visibility); };
+  }, []);
+
+  const opened = confessions.filter((item) => item.opened_at).length;
+  const read = confessions.filter((item) => item.is_read).length;
+  const returns = confessions.filter((item) => item.has_reply).length;
 
   return (
-    <main style={{ minHeight: "100vh", padding: "clamp(3rem, 7vh, 4.5rem) 1.25rem 7rem" }}>
-      <div style={{ maxWidth: 760, margin: "0 auto" }}>
-        <motion.header
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          style={{ marginBottom: "2.6rem" }}
-        >
-          <div className="ledger-nav">
-            <Link href="/" className="tw ledger-link">← Writing desk</Link>
-            <button type="button" onClick={lock} className="tw ledger-link">Lock the ledger</button>
-          </div>
-
-          <p className="tw" style={{ marginBottom: "0.9rem" }}>Private outgoing register · writer only</p>
-          <h1 className="ledger-title">
-            Letters you sent to <em>{config.readerName}</em>
-          </h1>
-          <p className="ledger-summary tw">
-            {confessions.length} {confessions.length === 1 ? "letter" : "letters"} · {openedCount} opened · {readCount} read · {reactionCount} sealed reactions
-          </p>
-        </motion.header>
-
-        {loading ? (
-          <motion.p
-            animate={{ opacity: [0.35, 0.8, 0.35] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="ledger-empty"
-          >
-            checking the dispatch book…
-          </motion.p>
-        ) : loadError ? (
-          <p className="ledger-empty ledger-empty--error">
-            The ledger could not be opened — check the Supabase upgrade and connection.
-          </p>
-        ) : confessions.length === 0 ? (
-          <p className="ledger-empty">No letters have left the writing desk yet.</p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.35rem" }}>
-            {confessions.map((confession, index) => (
-              <SentCard key={confession.id} confession={confession} index={index} />
-            ))}
-          </div>
-        )}
-      </div>
-    </main>
+    <main className="ledger-page"><div className="ledger-inner">
+      <motion.header initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} className="ledger-header">
+        <div className="ledger-nav"><Link href="/" className="tw ledger-link">← Writing desk</Link><button type="button" onClick={lock} className="tw ledger-link">Lock the ledger</button></div>
+        <p className="tw">Private outgoing register · writer only</p><h1 className="ledger-title">Letters you sent to <em>{config.readerName}</em></h1>
+        <p className="ledger-summary tw">{confessions.length} letters · {opened} opened · {read} read · {returns} return notes</p>
+      </motion.header>
+      {loading ? <p className="ledger-empty">checking the private dispatch book…</p>
+        : error ? <p className="ledger-empty ledger-empty--error">{error}</p>
+        : !confessions.length ? <p className="ledger-empty">No letters have left the writing desk yet.</p>
+        : <div className="ledger-stack">{confessions.map((item, index) => <SentCard key={item.id} confession={item} index={index} onChange={(next) => setConfessions((current) => current.map((entry) => entry.id === next.id ? next : entry))} />)}</div>}
+    </div></main>
   );
 }
 
 export default function SentPage() {
-  return (
-    <PasscodeGate
-      title="The dispatch ledger"
-      subtitle={`A private record of ${config.writerName}'s letters to ${config.readerName}.`}
-      password={config.writerPassword}
-      storageKey="confession-post-sent-auth"
-      postmark={{
-        ring: "OUTGOING MAIL · PRIVATE LEDGER · WRITER ONLY ·",
-        line1: "SENT",
-        line2: "WITH LOVE",
-        color: "var(--post-blue)",
-      }}
-      buttonLabel="Open the ledger"
-    >
-      {(lock) => <SentLedger lock={lock} />}
-    </PasscodeGate>
-  );
+  return <PasscodeGate role="writer" title="The dispatch ledger" subtitle={`A private record of ${config.writerName}'s letters to ${config.readerName}.`}
+    postmark={{ ring: "OUTGOING MAIL · PRIVATE LEDGER · WRITER ONLY ·", line1: "SENT", line2: "WITH LOVE", color: "var(--post-blue)" }} buttonLabel="Open the ledger">
+    {(lock) => <SentLedger lock={lock} />}
+  </PasscodeGate>;
 }
