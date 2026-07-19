@@ -1,7 +1,6 @@
 "use client";
 
 import { supabase } from "@/lib/supabase";
-import type { SenderRole } from "@/lib/confessions";
 
 export class PrivateApiError extends Error {
   status: number;
@@ -30,7 +29,7 @@ export async function privateJson<T>(url: string, init?: RequestInit): Promise<T
 }
 
 /**
- * Uploads a film straight to the private R2 bucket via a presigned PUT.
+ * Uploads a film straight to R2 via a presigned PUT.
  * Uses XHR so large files can report progress.
  */
 export async function uploadFilm(options: {
@@ -40,7 +39,7 @@ export async function uploadFilm(options: {
 }): Promise<string> {
   const signed = await privateJson<{ path: string; uploadUrl: string }>("/api/uploads/sign", {
     method: "POST",
-    body: JSON.stringify({ role: "writer", kind: "video", contentType: options.contentType }),
+    body: JSON.stringify({ kind: "video", contentType: options.contentType }),
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -64,21 +63,17 @@ export async function uploadFilm(options: {
 }
 
 export async function uploadPrivateEnclosure(options: {
-  role: SenderRole;
   kind: "image" | "audio";
   data: Blob;
   contentType: string;
-  parentId?: string;
 }): Promise<string> {
   const signed = await privateJson<{ bucket: string; path: string; token: string }>(
     "/api/uploads/sign",
     {
       method: "POST",
       body: JSON.stringify({
-        role: options.role,
         kind: options.kind,
         contentType: options.contentType,
-        parentId: options.parentId,
       }),
     },
   );

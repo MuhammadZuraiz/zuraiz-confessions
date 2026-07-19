@@ -1,19 +1,13 @@
 export const MOODS = [
   {
-    id: "tender",
-    label: "Tender",
-    description: "Soft, sincere, and close to the heart.",
-    defaultStationery: "cream",
-  },
-  {
     id: "flirty",
     label: "Flirty",
-    description: "Playful mail with a little more heat.",
+    description: "Playful mail with a little heat.",
     defaultStationery: "rose",
   },
   {
-    id: "after-dark",
-    label: "After Dark",
+    id: "spicy",
+    label: "Spicy",
     description: "Private correspondence, opened deliberately.",
     defaultStationery: "midnight",
   },
@@ -25,6 +19,11 @@ export function isConfessionMood(value: unknown): value is ConfessionMood {
   return MOODS.some((mood) => mood.id === value);
 }
 
-export function getMood(value: string | null | undefined) {
-  return MOODS.find((mood) => mood.id === value) ?? MOODS[0];
+export function normalizeMood(value: unknown): ConfessionMood {
+  return value === "spicy" ? "spicy" : "flirty";
+}
+
+export function getMood(value: unknown) {
+  const normalized = normalizeMood(value);
+  return MOODS.find((mood) => mood.id === normalized) ?? MOODS[0];
 }

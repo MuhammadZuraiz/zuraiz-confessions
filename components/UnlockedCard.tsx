@@ -5,8 +5,7 @@ import { motion } from "framer-motion";
 import Lightbox from "@/components/Lightbox";
 import Postmark from "@/components/Postmark";
 import ReactionSeals from "@/components/ReactionSeals";
-import ReturnNoteComposer from "@/components/ReturnNoteComposer";
-import { getConfessionImages, isAfterDark, type Confession } from "@/lib/confessions";
+import { getConfessionImages, isSpicy, type Confession } from "@/lib/confessions";
 import { getMood } from "@/lib/moods";
 import { privateJson } from "@/lib/private-api";
 import { getStationery } from "@/lib/stationery";
@@ -43,7 +42,7 @@ export default function UnlockedCard({ confession, onUpdate, onCover }: {
       {!confession.is_read && <span className="stamp-red letter-new">New</span>}
       <Postmark size={72} ring="THE CONFESSION POST · RECEIVED WITH LOVE ·"
         line1={posted.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()} line2={String(posted.getFullYear())}
-        style={{ position: "absolute", top: 16, right: 18, color: confession.mood === "after-dark" ? "#b36b78" : "var(--post-blue)", opacity: 0.48, transform: "rotate(9deg)" }} />
+        style={{ position: "absolute", top: 16, right: 18, color: confession.mood === "spicy" ? "#b36b78" : "var(--post-blue)", opacity: 0.48, transform: "rotate(9deg)" }} />
       <div className="letter-meta"><span className={`mood-stamp mood-stamp--${confession.mood}`}>{mood.label}</span><span>{posted.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</span></div>
       <p className="opened-letter__text">{confession.text}</p>
 
@@ -59,11 +58,10 @@ export default function UnlockedCard({ confession, onUpdate, onCover }: {
         <ReactionSeals value={confession.reaction} onSelect={(reaction) => action({ action: "reaction", reaction }, { reaction, reacted_at: new Date().toISOString(), is_read: true })} disabled={saving} />
         <div className="letter-actions__buttons">
           {!confession.is_read && <button type="button" className="btn-ghost" onClick={() => action({ action: "mark-read" }, { is_read: true })} disabled={saving}>{saving ? "Marking…" : "Mark as read ✓"}</button>}
-          {isAfterDark(confession) && onCover && <button type="button" className="btn-private" onClick={onCover}>Cover</button>}
+          {isSpicy(confession) && onCover && <button type="button" className="btn-private" onClick={onCover}>Cover</button>}
         </div>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <ReturnNoteComposer confession={confession} onSent={() => onUpdate(confession.id, { has_reply: true })} />
       <Lightbox images={images} index={lightbox} onClose={() => setLightbox(null)} onNavigate={setLightbox} />
     </motion.article>
   );

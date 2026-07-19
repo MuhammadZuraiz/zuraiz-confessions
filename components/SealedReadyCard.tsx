@@ -25,9 +25,7 @@ export default function SealedReadyCard({ confession, onUpdate }: {
         method: "PATCH",
         body: JSON.stringify({ action: "open" }),
       });
-      const next = result.confession
-        ? { ...result.confession, has_reply: confession.has_reply, reply: confession.reply }
-        : result.patch;
+      const next = result.confession ?? result.patch;
       setOpenedContent(next);
       if (reduceMotion) onUpdate(confession.id, next);
       else setOpening(true);
@@ -48,7 +46,7 @@ export default function SealedReadyCard({ confession, onUpdate }: {
       </motion.div>
       <div style={{ position: "relative", zIndex: 1, marginTop: "1.6rem" }}>
         <p className="tw">Sealed until</p><p className="sealed-date">{formatLongDate(confession.unlock_date!)}</p>
-        <span className="stamp-red">{opening || saving ? "Opening…" : confession.mood === "after-dark" ? "Break seal to reach private sleeve" : "The day has come — break the seal"}</span>
+        <span className="stamp-red">{opening || saving ? "Opening…" : confession.mood === "spicy" ? "Break seal to reach private sleeve" : "The day has come — break the seal"}</span>
         {error && <p className="form-error" role="alert">{error}</p>}
       </div>
     </motion.div>

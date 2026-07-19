@@ -7,9 +7,8 @@ import { formatLongDate } from "@/lib/confessions";
 import { getMood, type ConfessionMood } from "@/lib/moods";
 import { makePrivatePhoto } from "@/lib/photo-privacy";
 import { privateJson, uploadFilm, uploadPrivateEnclosure } from "@/lib/private-api";
-import { getStationery, type StationeryId } from "@/lib/stationery";
+import { getStationery } from "@/lib/stationery";
 import MoodPicker from "@/components/MoodPicker";
-import StationeryPicker from "@/components/StationeryPicker";
 import VoiceRecorder, { type RecordedAudio } from "@/components/VoiceRecorder";
 
 const MAX_IMAGE_BYTES = config.maxImageMb * 1024 * 1024;
@@ -35,8 +34,7 @@ function cooldownSeconds() {
 }
 
 export default function ConfessionForm() {
-  const [mood, setMood] = useState<ConfessionMood>("tender");
-  const [stationery, setStationery] = useState<StationeryId>("cream");
+  const [mood, setMood] = useState<ConfessionMood>("flirty");
   const [text, setText] = useState("");
   const [unlockDate, setUnlockDate] = useState("");
   const [images, setImages] = useState<SelectedImage[]>([]);
@@ -65,15 +63,13 @@ export default function ConfessionForm() {
         window.localStorage.removeItem("confession-post-draft");
         const raw = window.localStorage.getItem(DRAFT_KEY);
         if (!raw) return;
-        const draft = JSON.parse(raw) as { text?: string; unlockDate?: string; stationery?: StationeryId; mood?: ConfessionMood; savedAt?: number };
-        if (!draft.text?.trim() || !draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS || draft.mood === "after-dark") {
+        const draft = JSON.parse(raw) as { text?: string; unlockDate?: string; mood?: string; savedAt?: number };
+        if (!draft.text?.trim() || !draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS || draft.mood === "spicy") {
           window.localStorage.removeItem(DRAFT_KEY);
           return;
         }
-        const restoredMood = draft.mood === "flirty" ? "flirty" : "tender";
         setText(draft.text);
-        setMood(restoredMood);
-        if (draft.stationery) setStationery(draft.stationery);
+        setMood("flirty");
         const today = new Date().toISOString().split("T")[0];
         if (draft.unlockDate && draft.unlockDate >= today) setUnlockDate(draft.unlockDate);
         setDraftRestored(true);
@@ -88,22 +84,21 @@ export default function ConfessionForm() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        if (mood === "after-dark" || submitting || !text.trim()) {
+        if (mood === "spicy" || submitting || !text.trim()) {
           window.localStorage.removeItem(DRAFT_KEY);
           return;
         }
-        window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ text, unlockDate, stationery, mood, savedAt: Date.now() }));
+        window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ text, unlockDate, mood, savedAt: Date.now() }));
       } catch {
         // Draft saving is convenience only; posting still works without browser storage.
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [text, unlockDate, stationery, mood, submitting]);
+  }, [text, unlockDate, mood, submitting]);
 
   const changeMood = (next: ConfessionMood) => {
     setMood(next);
-    setStationery(getMood(next).defaultStationery);
-    if (next === "after-dark") {
+    if (next === "spicy") {
       setDraftRestored(false);
       try { window.localStorage.removeItem(DRAFT_KEY); } catch {}
     }
@@ -186,10 +181,10 @@ export default function ConfessionForm() {
     try {
       const imagePaths: string[] = [];
       for (const image of images) {
-        imagePaths.push(await uploadPrivateEnclosure({ role: "writer", kind: "image", data: image.file, contentType: "image/webp" }));
+        imagePaths.push(await uploadPrivateEnclosure({ kind: "image", data: image.file, contentType: "image/webp" }));
       }
       const audioPath = audio
-        ? await uploadPrivateEnclosure({ role: "writer", kind: "audio", data: audio.blob, contentType: audio.contentType })
+        ? await uploadPrivateEnclosure({ kind: "audio", data: audio.blob, contentType: audio.contentType })
         : null;
 
       let videoPath: string | null = null;
@@ -201,7 +196,7 @@ export default function ConfessionForm() {
 
       await privateJson("/api/confessions", {
         method: "POST",
-        body: JSON.stringify({ text: trimmed, mood, stationery, unlockDate: unlockDate || null, imagePaths, audioPath, videoPath }),
+        body: JSON.stringify({ text: trimmed, mood, unlockDate: unlockDate || null, imagePaths, audioPath, videoPath }),
       });
 
       setSealedUntil(unlockDate || null);
@@ -226,12 +221,13 @@ export default function ConfessionForm() {
   };
 
   const moodInfo = getMood(mood);
+  const stationery = moodInfo.defaultStationery;
   const today = new Date().toISOString().split("T")[0];
   const busy = submitting || processingPhotos;
 
   return (
     <div style={{ position: "relative" }}>
-      <div className={`airmail${mood === "after-dark" ? " airmail--private" : ""}`} />
+      <div className={`airmail${mood === "spicy" ? " airmail--private" : ""}`} />
       <div className={`sheet ${getStationery(stationery).className} letter-compose letter-compose--${mood}`.trim()}>
         <motion.div animate={{ opacity: submitted ? 0.2 : 1 }}>
           <section className="compose-section">
@@ -239,12 +235,7 @@ export default function ConfessionForm() {
             <MoodPicker value={mood} onChange={changeMood} disabled={busy} />
           </section>
 
-          <section className="compose-section">
-            <span className="tw field-label">Stationery</span>
-            <StationeryPicker value={stationery} onChange={setStationery} disabled={busy} />
-          </section>
-
-          {mood === "after-dark" && (
+          {mood === "spicy" && (
             <div className="private-notice" role="note">
               <strong>Private enclosure</strong>
               <span>This letter stays only in this tab until posted. No local draft is saved.</span>
@@ -257,7 +248,7 @@ export default function ConfessionForm() {
               {draftRestored && <motion.p className="draft-note" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>Your unsent draft was restored. ✎</motion.p>}
             </AnimatePresence>
             <textarea id="confession-text" className="letter-input" value={text} onChange={(event) => setText(event.target.value)}
-              placeholder={mood === "after-dark" ? "For your eyes only…" : "Dear you — here's what I never said…"}
+              placeholder={mood === "spicy" ? "For your eyes only…" : "Dear you — here's what I never said…"}
               rows={7} disabled={busy} maxLength={20000} />
           </section>
 

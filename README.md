@@ -1,81 +1,56 @@
 # The Confession Post ✉
 
-A private post office for two, with Tender, Flirty, and deliberately concealed After Dark letters. Zuraiz writes from `/`, Qunoot reads and sends one brief return note from `/admin`, and Zuraiz sees delivery history and return post in `/sent`.
+A private post office for two. Zuraiz writes Flirty or Spicy letters at `/`, Qunoot opens her mailbox at `/qunoot`, and Zuraiz sees delivery history at `/sent`. The old `/admin` address permanently redirects to `/qunoot`.
 
-## Upgrade 02 rollout — order matters
+## Upgrade 04 rollout
 
-The migration is split so existing letters and media stay available during the application switch.
+Upgrade 04 keeps every existing letter and enclosure. Legacy return-note rows remain in the database but the application no longer reads or creates them.
 
 1. Back up the Supabase project.
-2. In Supabase SQL Editor, run `supabase/upgrade-02-prep.sql`. It is idempotent and keeps Upgrade 01 operational.
-3. Add all variables from `.env.example` locally and in Vercel. Get the URL, anon key, and server-only service-role key from Supabase project settings. Use different private passphrases for `WRITER_PASSCODE` and `READER_PASSCODE`.
-4. Generate `SESSION_SECRET` with at least 32 unpredictable characters. For example:
+2. In the Supabase SQL Editor, run `supabase/upgrade-04.sql`. It is idempotent and performs the following explicit data migrations:
+   - `tender` moods become `flirty`;
+   - `after-dark` moods become `spicy`;
+   - cream stationery on migrated Flirty letters becomes rose;
+   - the obsolete one-reader-reply unique index is dropped without deleting replies;
+   - the image limit becomes 20 MB and the image/audio buckets remain public.
+3. In Cloudflare R2, enable the film bucket's **r2.dev development URL**.
+4. Add that base URL as `R2_PUBLIC_BASE_URL` in `.env.local` and in Vercel.
+5. Redeploy the application.
 
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
-   ```
+`supabase/upgrade-02-lockdown.sql` is now superseded and must not be run for the current application. Upgrade 04 contains its anonymous **table** policy removals and grants revocation, but intentionally does not make storage buckets private, remove public storage-object read policies, or restrict photos to WebP only. The image bucket accepts JPEG, PNG, and WebP.
 
-5. Deploy this application and verify writer login, reader login, old letters, and one new test letter.
-6. Immediately run `supabase/upgrade-02-lockdown.sql`. Do not run lockdown before the new deployment is ready: it makes both buckets private and revokes all anonymous table/storage access.
-7. Verify an old `/storage/v1/object/public/...` media URL now fails, while the same enclosure still opens inside an authenticated letter.
+For a new Supabase project, run `supabase/setup.sql`, `supabase/upgrade-01.sql`, `supabase/upgrade-02-prep.sql`, `supabase/upgrade-03-video.sql`, and `supabase/upgrade-04.sql` in that order.
 
-For a new Supabase project, run `supabase/setup.sql`, `supabase/upgrade-01.sql`, and `supabase/upgrade-02-prep.sql` in that order, deploy with the six environment variables, then run `supabase/upgrade-02-lockdown.sql`.
+## Privacy model
 
-The service-role key and passcodes are server secrets. Never place them in `lib/config.ts`, browser code, a `NEXT_PUBLIC_` variable, screenshots, or Git history.
+Writer and reader passcodes remain server-only. Separate signed HttpOnly, Secure, SameSite=Strict cookies protect the writer desk, reader mailbox, and all confession APIs. Login throttling and same-origin mutation checks remain enabled. The service-role key, passcodes, session secret, and R2 credentials must never be exposed through `NEXT_PUBLIC_` variables or committed to Git.
 
-## Upgrade 03 — films (original-quality video)
+Supabase photos and voice notes, and Cloudflare R2 films, use permanent public URLs with unguessable UUID object paths. The APIs remain session-gated. A concealed Spicy letter's initial API response omits its text and every media URL; Qunoot receives them only after choosing **Open privately**. Revealed Spicy content covers and is removed from client state on blur, tab hiding, route change, or **Cover**. Spicy drafts are never stored in browser storage and Spicy letters are excluded from automatic **On this day** excerpts.
 
-Videos are too large for Supabase's free tier (50 MB per-file cap), so film
-enclosures live in a **private Cloudflare R2 bucket**: 10 GB storage and
-unlimited downloads on the free tier, uploaded straight from the browser via
-presigned URLs and played back through short-lived signed links. Same privacy
-model as everything else — the bucket is private, and After Dark rules apply.
+New photos are re-encoded to full-dimension WebP in the browser to remove EXIF, device, and location metadata. Both pre-encode and post-encode limits are 20 MB, and failed private processing rejects the upload instead of falling back to the original.
 
-One-time setup:
+## Films
 
-1. In Supabase SQL Editor, run `supabase/upgrade-03-video.sql` (adds the
-   `video_path` column; safe to re-run).
-2. Create a Cloudflare account at dash.cloudflare.com and open **R2 Object
-   Storage**. Enabling R2 asks for a payment method; usage within the free
-   allowance (10 GB) bills $0.
-3. Create a bucket, e.g. `confession-films`. Leave it **private** (do not
-   enable the r2.dev public URL).
-4. Bucket → **Settings → CORS policy**, paste (add your Vercel domain later):
+Films retain the existing direct upload flow: the server creates a short-lived presigned PUT URL and the browser uploads the original MP4, MOV, or WebM file directly to R2, up to 1 GB. Playback uses `R2_PUBLIC_BASE_URL/{video_path}`.
 
-   ```json
-   [
-     {
-       "AllowedOrigins": ["http://localhost:3000", "https://YOUR-DOMAIN.vercel.app"],
-       "AllowedMethods": ["GET", "PUT"],
-       "AllowedHeaders": ["*"],
-       "MaxAgeSeconds": 3600
-     }
-   ]
-   ```
+One-time Cloudflare setup:
 
-5. R2 overview → **Manage R2 API Tokens** → Create API token with
-   **Object Read & Write** scoped to that one bucket. Copy the Access Key ID
-   and Secret Access Key.
-6. Fill the four `R2_*` variables in `.env.local` (and later in Vercel):
-   `R2_ACCOUNT_ID` (shown on the R2 overview page), `R2_ACCESS_KEY_ID`,
-   `R2_SECRET_ACCESS_KEY`, `R2_VIDEO_BUCKET` (the bucket name).
-
-Until those variables are set, the site works normally — attempting to post a
-film simply reports that film storage is not configured yet.
-
-Notes: films upload as-recorded (MP4/MOV/WebM, up to 1 GB each) with a
-progress percentage on the post button; playback links last six hours. If the
-10 GB fills up someday, R2 overage is ~$0.015 per GB-month, or prune old films
-in the Cloudflare dashboard.
+1. Create or reuse the R2 film bucket.
+2. In **Bucket → Settings → CORS policy**, allow `PUT` from localhost and the Vercel domain. Existing `GET` permission may remain.
+3. Create an R2 API token with Object Read & Write access scoped to that bucket.
+4. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_VIDEO_BUCKET` locally and in Vercel.
+5. Enable the bucket's **r2.dev development URL** and set it as `R2_PUBLIC_BASE_URL` without a trailing slash.
 
 ## Local development
+
+Copy `.env.example` to `.env.local`, supply the real values, then run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` for the writer desk, `/admin` for the reader mailbox, and `/sent` for the writer ledger. Sessions are signed HttpOnly, Secure, SameSite=Strict cookies lasting 30 days. Modern browsers treat localhost as a secure development context; if a browser refuses the Secure cookie over local HTTP, use its HTTPS-localhost mode.
+Open `http://localhost:3000` for the writer desk, `/qunoot` for the reader mailbox, and `/sent` for the writer ledger.
 
 Production checks:
 
@@ -84,31 +59,13 @@ npm run lint
 npm run build
 ```
 
-## What Upgrade 02 adds
+## Current experience
 
-- Server-only writer and reader passcodes, separate signed sessions, explicit logout, same-origin mutation checks, and persistent five-attempt/15-minute login throttling keyed by an HMAC of role and IP.
-- Private Supabase table/storage access through server-authorized endpoints, direct signed uploads, and five-minute signed media downloads.
-- Tender, Flirty, and After Dark moods with matching stationery defaults and mailbox filters.
-- After Dark sleeves that return no text or media URLs until `Open privately`, then cover and purge sensitive client state on blur, tab hiding, route change, or `Cover`.
-- Memory-only After Dark composition: intimate text is never stored as a local browser draft.
-- Browser-side full-dimension WebP re-encoding of every new photo. Posting rejects a photo if metadata-stripping processing fails; it never uploads the original as fallback.
-- One reader return note per original letter, limited to 120 words and either one photo or one voice note. It inherits the original mood and concealment rules.
-- Expanded reaction seals and an After Dark vault inside the unified mailbox. After Dark letters are excluded from automatic `On this day` excerpts.
+- Exactly two moods: Flirty on rose stationery and Spicy on midnight stationery.
+- No stationery picker; changing mood immediately re-themes the compose sheet.
+- Spicy private sleeves, deliberate reveal, automatic cover, and memory-only drafting.
+- Sealed-date ceremony, postal animations, photos, voice notes, original-quality films, independent reactions, and PWA behavior remain intact.
+- Exactly two reaction seals: ❤️ **love it** and 🤤 **left me drooling**. Unknown retired reaction slugs render nothing.
+- Qunoot cannot upload or send return notes.
 
-Video, delete, unsend, view-once, expiry, and media revocation are intentionally not included. Existing enclosures remain permanent; EXIF removal applies only to newly selected photos because old files are not re-encoded.
-
-## Focused verification after lockdown
-
-- Writer and reader cookies cannot call each other's protected endpoints.
-- Five wrong attempts block that role/IP for 15 minutes; logout removes only that role's session.
-- Anonymous table reads/writes and public bucket URLs fail.
-- Existing letters retain text, photos, voice, seal dates, reactions, opened/read history, and stationery.
-- An After Dark mailbox response, page source, DOM, and browser network response contain no letter text or signed media URL before deliberate reveal.
-- Revealed After Dark content covers on blur/visibility loss and can be reopened.
-- A test JPG containing GPS/EXIF uploads as WebP with no EXIF metadata.
-- A return note rejects 121+ words, a second reply, both photo and audio, and video.
-- Tender and Flirty drafts, ceremonies, reactions, lightbox, audio, ledger, PWA manifest, mobile layout, lint, and production build pass.
-
-## Vercel
-
-Keep the Git repository private. Add all six variables from `.env.example` to Production (and Preview only if desired), deploy, perform the rollout above, then test `/`, `/admin`, and `/sent` over the HTTPS deployment. Installability should be tested on that deployed URL from Safari's **Add to Home Screen** or Chrome's **Install app** option.
+Keep the Git repository private. After deployment, test `/`, `/qunoot`, `/admin`, and `/sent` over HTTPS, including both roles, a Flirty letter, a concealed Spicy letter, all three enclosure types, the seal ceremony, and PWA installation.

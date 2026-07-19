@@ -1,7 +1,5 @@
 import "server-only";
 
-import type { AuthRole } from "@/lib/server/auth";
-
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const IMAGE_EXT = "(?:jpg|png|webp)";
 const AUDIO_EXT = "(?:webm|m4a|mp3|ogg)";
@@ -27,14 +25,11 @@ export function isUuid(value: unknown): value is string {
 
 export function validUploadPath(
   value: unknown,
-  role: AuthRole,
   kind: "image" | "audio",
-  parentId?: string,
 ): value is string {
   if (typeof value !== "string") return false;
   const extension = kind === "image" ? IMAGE_EXT : AUDIO_EXT;
-  const prefix = role === "writer" ? "writer" : `reader/${parentId || "missing"}`;
-  return new RegExp(`^${prefix}/${UUID}\\.${extension}$`, "i").test(value);
+  return new RegExp(`^writer/${UUID}\\.${extension}$`, "i").test(value);
 }
 
 export function normalizeUnlockDate(value: unknown): string | null | "invalid" {
@@ -52,11 +47,6 @@ export function normalizeUnlockDate(value: unknown): string | null | "invalid" {
     parsed.getUTCDate() === day
     ? value
     : "invalid";
-}
-
-export function wordCount(value: string): number {
-  const trimmed = value.trim();
-  return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
 export function uploadFormat(kind: unknown, contentType: unknown) {

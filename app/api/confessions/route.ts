@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { config } from "@/lib/config";
 import type { Confession, ConfessionRow } from "@/lib/confessions";
-import { isConfessionMood } from "@/lib/moods";
-import { STATIONERY } from "@/lib/stationery";
+import { getMood, isConfessionMood, normalizeMood } from "@/lib/moods";
 import { hasSession } from "@/lib/server/auth";
 import { rowIsUnlocked, serializeConfession } from "@/lib/server/confession-data";
 import { isSameOrigin } from "@/lib/server/request-security";
@@ -32,34 +31,14 @@ async function listConfessions(request: Request) {
     .order("created_at", { ascending: false });
   if (error) throw error;
 
-  const rootRows = (roots || []) as ConfessionRow[];
-  const rootIds = rootRows.map((row) => row.id);
-  let replyRows: ConfessionRow[] = [];
-  if (rootIds.length > 0) {
-    const { data: replies, error: replyError } = await supabase
-      .from("confessions")
-      .select("*")
-      .eq("sender_role", "reader")
-      .in("reply_to", rootIds);
-    if (replyError) throw replyError;
-    replyRows = (replies || []) as ConfessionRow[];
-  }
-
-  const replyByParent = new Map(replyRows.map((row) => [row.reply_to!, row]));
   const output: Confession[] = [];
-  for (const row of rootRows) {
-    const replyRow = replyByParent.get(row.id);
-    const reply = view === "sent" && replyRow
-      ? await serializeConfession(replyRow, { forceConcealed: true })
-      : null;
+  for (const row of (roots || []) as ConfessionRow[]) {
     const readerCanSeeSealedContent =
       rowIsUnlocked(row) && (!row.unlock_date || Boolean(row.opened_at));
     output.push(
       await serializeConfession(row, {
-        reveal: row.mood !== "after-dark",
+        reveal: view === "sent" || normalizeMood(row.mood) !== "spicy",
         forceConcealed: view === "mailbox" && !readerCanSeeSealedContent,
-        hasReply: Boolean(replyRow),
-        reply,
       }),
     );
   }
@@ -99,21 +78,19 @@ export async function POST(request: Request) {
   if (!text || text.length > 20000) return jsonError("Write a valid letter before posting it.", 400);
   if (!isConfessionMood(body?.mood)) return jsonError("Choose a valid letter mood.", 400);
 
-  const stationery = STATIONERY.some((item) => item.id === body?.stationery)
-    ? body.stationery
-    : "cream";
+  const stationery = getMood(body.mood).defaultStationery;
   const unlockDate = normalizeUnlockDate(body?.unlockDate);
   if (unlockDate === "invalid") return jsonError("Choose a valid seal date.", 400);
 
   const imagePaths = Array.isArray(body?.imagePaths) ? body.imagePaths : [];
   if (
     imagePaths.length > config.maxImages ||
-    imagePaths.some((path: unknown) => !validUploadPath(path, "writer", "image"))
+    imagePaths.some((path: unknown) => !validUploadPath(path, "image"))
   ) {
     return jsonError("One of the enclosed photos could not be verified.", 400);
   }
   const audioPath = body?.audioPath || null;
-  if (audioPath && !validUploadPath(audioPath, "writer", "audio")) {
+  if (audioPath && !validUploadPath(audioPath, "audio")) {
     return jsonError("The voice note could not be verified.", 400);
   }
   const videoPath = body?.videoPath || null;

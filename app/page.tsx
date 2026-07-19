@@ -20,7 +20,7 @@ function WritingDesk({ lock }: { lock: () => Promise<void> }) {
       <div className="rise rise-4 writing-letter"><ConfessionForm /></div>
       <footer className="writing-footer">
         <div className="airmail" />
-        <p className="tw">Made for two · private by design · <a href="/admin">the mailbox</a> · <a href="/sent">your ledger</a></p>
+        <p className="tw">Made for two · private by design · <a href="/qunoot">the mailbox</a> · <a href="/sent">your ledger</a></p>
       </footer>
     </main>
   );

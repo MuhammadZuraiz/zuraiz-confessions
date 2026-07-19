@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { config } from "@/lib/config";
 import type { Confession, ConfessionRow } from "@/lib/confessions";
+import { normalizeMood } from "@/lib/moods";
 import { hasSession } from "@/lib/server/auth";
 import { rowIsUnlocked, serializeConfession } from "@/lib/server/confession-data";
 import { isSameOrigin } from "@/lib/server/request-security";
@@ -58,7 +59,7 @@ export async function PATCH(
   if (updateError) return NextResponse.json({ error: "The letter could not be updated." }, { status: 503 });
 
   let confession: Confession | undefined;
-  if (body?.action === "open" && row.mood !== "after-dark") {
+  if (body?.action === "open" && normalizeMood(row.mood) !== "spicy") {
     confession = await serializeConfession({ ...row, ...patch }, { reveal: true });
   }
   return NextResponse.json({ ok: true, patch, confession });

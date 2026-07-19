@@ -36,8 +36,6 @@ export type Confession = Omit<ConfessionRow, "text" | "image_urls"> & {
   has_audio: boolean;
   video_url?: string | null;
   has_video?: boolean;
-  has_reply?: boolean;
-  reply?: Confession | null;
 };
 
 export function getConfessionImages(confession: Confession): string[] {
@@ -47,8 +45,8 @@ export function getConfessionImages(confession: Confession): string[] {
   return confession.image_url ? [confession.image_url] : [];
 }
 
-export function isAfterDark(confession: Pick<Confession, "mood">): boolean {
-  return confession.mood === "after-dark";
+export function isSpicy(confession: Pick<Confession, "mood">): boolean {
+  return confession.mood === "spicy";
 }
 
 /** A letter is readable once local midnight of its unlock date has passed. */

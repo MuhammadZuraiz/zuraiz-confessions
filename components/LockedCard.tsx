@@ -56,7 +56,7 @@ export default function LockedCard({ confession }: { confession: Confession }) {
           {days === 1 ? "Opens tomorrow" : `${days} days to go`}
         </span>
 
-        {confession.mood === "after-dark" && (
+        {confession.mood === "spicy" && (
           <p style={{ marginTop: ".9rem", fontSize: ".82rem", fontStyle: "italic", opacity: .7 }}>
             A private sleeve waits inside.
           </p>
