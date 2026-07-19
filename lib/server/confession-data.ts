@@ -2,6 +2,7 @@ import "server-only";
 
 import type { Confession, ConfessionRow, SenderRole } from "@/lib/confessions";
 import { isConfessionMood } from "@/lib/moods";
+import { isR2Configured, presignVideoDownload } from "@/lib/server/r2";
 import { getSupabaseAdmin } from "@/lib/server/supabase-admin";
 
 function parsePublicPath(url: string | null | undefined, bucket: string): string | null {
@@ -66,6 +67,11 @@ export async function serializeConfession(
     ? null
     : await signPath("confession-audio", audioPath);
 
+  let signedVideo: string | null = null;
+  if (!concealed && row.video_path && isR2Configured()) {
+    signedVideo = await presignVideoDownload(row.video_path).catch(() => null);
+  }
+
   return {
     id: row.id,
     text: concealed ? null : row.text,
@@ -85,6 +91,8 @@ export async function serializeConfession(
     concealed: Boolean(concealed),
     image_count: imagePaths.length,
     has_audio: Boolean(audioPath),
+    video_url: signedVideo,
+    has_video: Boolean(row.video_path),
     has_reply: options.hasReply,
     reply: options.reply,
   };

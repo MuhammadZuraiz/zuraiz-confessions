@@ -22,6 +22,7 @@ export type ConfessionRow = {
   reply_to?: string | null;
   image_paths?: string[] | null;
   audio_path?: string | null;
+  video_path?: string | null;
 };
 
 export type Confession = Omit<ConfessionRow, "text" | "image_urls"> & {
@@ -33,6 +34,8 @@ export type Confession = Omit<ConfessionRow, "text" | "image_urls"> & {
   concealed: boolean;
   image_count: number;
   has_audio: boolean;
+  video_url?: string | null;
+  has_video?: boolean;
   has_reply?: boolean;
   reply?: Confession | null;
 };

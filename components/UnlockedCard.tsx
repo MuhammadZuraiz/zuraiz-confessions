@@ -48,6 +48,8 @@ export default function UnlockedCard({ confession, onUpdate, onCover }: {
       <p className="opened-letter__text">{confession.text}</p>
 
       {confession.audio_url && <div className="letter-audio"><span className="tw">His voice ♫</span><audio className="voice" controls src={confession.audio_url} preload="metadata" /></div>}
+      {confession.video_url && <div className="letter-video"><span className="tw">His film ✦</span>
+        <video className="film" controls playsInline preload="metadata" src={confession.video_url} /></div>}
       {images.length > 0 && <div className="letter-photos">{images.map((url, index) => <button key={url} type="button" className="snapshot" onClick={() => setLightbox(index)} aria-label={`View photo ${index + 1}`}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={`Enclosed photo ${index + 1}`} />

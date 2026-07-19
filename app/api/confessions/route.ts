@@ -7,7 +7,7 @@ import { hasSession } from "@/lib/server/auth";
 import { rowIsUnlocked, serializeConfession } from "@/lib/server/confession-data";
 import { isSameOrigin } from "@/lib/server/request-security";
 import { getSupabaseAdmin, ServerConfigurationError } from "@/lib/server/supabase-admin";
-import { normalizeUnlockDate, validUploadPath } from "@/lib/server/validation";
+import { normalizeUnlockDate, validUploadPath, validVideoPath } from "@/lib/server/validation";
 
 export const runtime = "nodejs";
 
@@ -116,6 +116,10 @@ export async function POST(request: Request) {
   if (audioPath && !validUploadPath(audioPath, "writer", "audio")) {
     return jsonError("The voice note could not be verified.", 400);
   }
+  const videoPath = body?.videoPath || null;
+  if (videoPath && !validVideoPath(videoPath)) {
+    return jsonError("The film could not be verified.", 400);
+  }
 
   try {
     const supabase = getSupabaseAdmin();
@@ -126,6 +130,8 @@ export async function POST(request: Request) {
       image_paths: imagePaths,
       audio_url: null,
       audio_path: audioPath,
+      // Only sent when present so posting still works before upgrade-03 runs.
+      ...(videoPath ? { video_path: videoPath } : {}),
       unlock_date: unlockDate,
       stationery,
       mood: body.mood,

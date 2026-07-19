@@ -42,7 +42,7 @@ export default function PrivateSleeve({ confession, role, onReveal, returnPost =
         <h2>{returnPost ? "A return note is waiting" : "Private enclosure"}</h2>
         <p>{confession.mood === "after-dark"
           ? "Contents concealed until you choose to open."
-          : confession.image_count > 0 || confession.has_audio
+          : confession.image_count > 0 || confession.has_audio || confession.has_video
             ? "Contains a private enclosure."
             : "Contents concealed until you choose to open."}</p>
         <button type="button" className="btn-private" onClick={reveal} disabled={opening}>

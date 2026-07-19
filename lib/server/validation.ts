@@ -5,6 +5,21 @@ import type { AuthRole } from "@/lib/server/auth";
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const IMAGE_EXT = "(?:jpg|png|webp)";
 const AUDIO_EXT = "(?:webm|m4a|mp3|ogg)";
+const VIDEO_EXT = "(?:mp4|mov|webm)";
+
+/** Writer-only film enclosure paths, stored in the R2 video bucket. */
+export function validVideoPath(value: unknown): value is string {
+  return (
+    typeof value === "string" && new RegExp(`^writer/${UUID}\\.${VIDEO_EXT}$`, "i").test(value)
+  );
+}
+
+export function videoUploadFormat(contentType: unknown) {
+  if (contentType === "video/mp4") return { ext: "mp4" as const };
+  if (contentType === "video/quicktime") return { ext: "mov" as const };
+  if (contentType === "video/webm") return { ext: "webm" as const };
+  return null;
+}
 
 export function isUuid(value: unknown): value is string {
   return typeof value === "string" && new RegExp(`^${UUID}$`, "i").test(value);

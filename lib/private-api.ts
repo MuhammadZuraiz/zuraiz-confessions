@@ -29,6 +29,40 @@ export async function privateJson<T>(url: string, init?: RequestInit): Promise<T
   return result as T;
 }
 
+/**
+ * Uploads a film straight to the private R2 bucket via a presigned PUT.
+ * Uses XHR so large files can report progress.
+ */
+export async function uploadFilm(options: {
+  file: File;
+  contentType: string;
+  onProgress?: (percent: number) => void;
+}): Promise<string> {
+  const signed = await privateJson<{ path: string; uploadUrl: string }>("/api/uploads/sign", {
+    method: "POST",
+    body: JSON.stringify({ role: "writer", kind: "video", contentType: options.contentType }),
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", signed.uploadUrl);
+    xhr.setRequestHeader("Content-Type", options.contentType);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && options.onProgress) {
+        options.onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new PrivateApiError("The film failed to upload.", xhr.status || 503));
+    xhr.onerror = () => reject(new PrivateApiError("The film failed to upload.", 503));
+    xhr.send(options.file);
+  });
+
+  return signed.path;
+}
+
 export async function uploadPrivateEnclosure(options: {
   role: SenderRole;
   kind: "image" | "audio";

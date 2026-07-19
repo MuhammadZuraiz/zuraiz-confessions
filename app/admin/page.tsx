@@ -14,7 +14,7 @@ import { privateJson } from "@/lib/private-api";
 type Filter = "all" | "unread" | "sealed" | "tender" | "flirty" | "after-dark";
 
 function cover(confession: Confession): Confession {
-  return { ...confession, text: null, image_url: null, image_urls: [], audio_url: null, concealed: true };
+  return { ...confession, text: null, image_url: null, image_urls: [], audio_url: null, video_url: null, concealed: true };
 }
 
 function Mailbox({ lock }: { lock: () => Promise<void> }) {

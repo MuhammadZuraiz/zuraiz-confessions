@@ -17,7 +17,7 @@ function date(value: string) {
 }
 
 function cover(confession: Confession): Confession {
-  return { ...confession, text: null, image_url: null, image_urls: [], audio_url: null, concealed: true };
+  return { ...confession, text: null, image_url: null, image_urls: [], audio_url: null, video_url: null, concealed: true };
 }
 
 function SentCard({ confession, index, onChange }: { confession: Confession; index: number; onChange: (next: Confession) => void }) {
@@ -39,7 +39,7 @@ function SentCard({ confession, index, onChange }: { confession: Confession; ind
 
       {confession.concealed ? <PrivateSleeve confession={confession} role="writer" onReveal={mergeRoot} />
         : <div className="sent-content"><p className="sent-excerpt">&ldquo;{confession.text}&rdquo;</p>
-          <p className="tw sent-card__contents">{confession.image_count ? `${confession.image_count} photo${confession.image_count === 1 ? "" : "s"}` : "letter"}{confession.has_audio ? " · voice note ♫" : ""}</p>
+          <p className="tw sent-card__contents">{confession.image_count ? `${confession.image_count} photo${confession.image_count === 1 ? "" : "s"}` : "letter"}{confession.has_audio ? " · voice note ♫" : ""}{confession.has_video ? " · film ✦" : ""}</p>
           {isAfterDark(confession) && <button type="button" className="btn-private" onClick={() => onChange(cover(confession))}>Cover</button>}
         </div>}
 

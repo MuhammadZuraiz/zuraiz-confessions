@@ -6,13 +6,19 @@ import { config } from "@/lib/config";
 import { formatLongDate } from "@/lib/confessions";
 import { getMood, type ConfessionMood } from "@/lib/moods";
 import { makePrivatePhoto } from "@/lib/photo-privacy";
-import { privateJson, uploadPrivateEnclosure } from "@/lib/private-api";
+import { privateJson, uploadFilm, uploadPrivateEnclosure } from "@/lib/private-api";
 import { getStationery, type StationeryId } from "@/lib/stationery";
 import MoodPicker from "@/components/MoodPicker";
 import StationeryPicker from "@/components/StationeryPicker";
 import VoiceRecorder, { type RecordedAudio } from "@/components/VoiceRecorder";
 
 const MAX_IMAGE_BYTES = config.maxImageMb * 1024 * 1024;
+const MAX_FILM_BYTES = 1024 * 1024 * 1024; // 1 GB safety ceiling per film
+const FILM_TYPES: Record<string, string> = {
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+};
 const COOLDOWN_KEY = "confession-post-last-submit";
 const DRAFT_KEY = "confession-post-draft-v2";
 const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -35,6 +41,8 @@ export default function ConfessionForm() {
   const [unlockDate, setUnlockDate] = useState("");
   const [images, setImages] = useState<SelectedImage[]>([]);
   const [audio, setAudio] = useState<RecordedAudio | null>(null);
+  const [film, setFilm] = useState<File | null>(null);
+  const [filmProgress, setFilmProgress] = useState<number | null>(null);
   const [processingPhotos, setProcessingPhotos] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -42,6 +50,7 @@ export default function ConfessionForm() {
   const [draftRestored, setDraftRestored] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const filmRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<SelectedImage[]>([]);
   const reduceMotion = useReducedMotion();
 
@@ -147,6 +156,22 @@ export default function ConfessionForm() {
     }
   };
 
+  const chooseFilm = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError(null);
+    if (!FILM_TYPES[file.type]) {
+      setError("Please choose an MP4, MOV, or WebM film.");
+      return;
+    }
+    if (file.size > MAX_FILM_BYTES) {
+      setError("Please keep a film under 1 GB.");
+      return;
+    }
+    setFilm(file);
+  };
+
   const submit = async () => {
     const trimmed = text.trim();
     if (!trimmed || submitting || processingPhotos) return;
@@ -167,9 +192,16 @@ export default function ConfessionForm() {
         ? await uploadPrivateEnclosure({ role: "writer", kind: "audio", data: audio.blob, contentType: audio.contentType })
         : null;
 
+      let videoPath: string | null = null;
+      if (film) {
+        setFilmProgress(0);
+        videoPath = await uploadFilm({ file: film, contentType: film.type, onProgress: setFilmProgress });
+        setFilmProgress(null);
+      }
+
       await privateJson("/api/confessions", {
         method: "POST",
-        body: JSON.stringify({ text: trimmed, mood, stationery, unlockDate: unlockDate || null, imagePaths, audioPath }),
+        body: JSON.stringify({ text: trimmed, mood, stationery, unlockDate: unlockDate || null, imagePaths, audioPath, videoPath }),
       });
 
       setSealedUntil(unlockDate || null);
@@ -178,6 +210,7 @@ export default function ConfessionForm() {
       setUnlockDate("");
       if (audio) URL.revokeObjectURL(audio.url);
       setAudio(null);
+      setFilm(null);
       try {
         window.localStorage.removeItem(DRAFT_KEY);
         window.localStorage.setItem(COOLDOWN_KEY, String(Date.now()));
@@ -187,6 +220,7 @@ export default function ConfessionForm() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The letter could not be posted.");
     } finally {
+      setFilmProgress(null);
       setSubmitting(false);
     }
   };
@@ -254,13 +288,37 @@ export default function ConfessionForm() {
             <VoiceRecorder value={audio} onChange={setAudio} disabled={busy} />
           </section>
 
+          <section className="compose-section">
+            <span className="tw field-label">Enclose a film <span className="field-hint">(optional — sent as recorded)</span></span>
+            {film ? (
+              <div className="film-chip">
+                <span aria-hidden="true">🎞</span>
+                <span className="film-chip__name">{film.name}</span>
+                <button type="button" className="btn-ghost" onClick={() => setFilm(null)} disabled={busy}>
+                  Remove ✕
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="btn-enclose" onClick={() => filmRef.current?.click()} disabled={busy}>
+                + enclose a film
+              </button>
+            )}
+            <input ref={filmRef} type="file" accept="video/mp4,video/quicktime,video/webm" onChange={chooseFilm} hidden />
+          </section>
+
           {error && <p className="form-error" role="alert">{error}</p>}
 
           <div className="compose-submit">
             <span className="tw">{moodInfo.label} post · {unlockDate ? "wax sealed" : "first class"}</span>
             <motion.button type="button" className="btn-wax" onClick={submit} disabled={busy || !text.trim()}
               whileHover={!reduceMotion ? { scale: 1.03 } : {}} whileTap={!reduceMotion ? { scale: 0.97 } : {}}>
-              {submitting ? "Sealing…" : unlockDate ? "Seal & post" : "Post the letter"}
+              {submitting
+                ? filmProgress !== null
+                  ? `Posting the film… ${filmProgress}%`
+                  : "Sealing…"
+                : unlockDate
+                  ? "Seal & post"
+                  : "Post the letter"}
             </motion.button>
           </div>
         </motion.div>

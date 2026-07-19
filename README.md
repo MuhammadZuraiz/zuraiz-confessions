@@ -23,6 +23,51 @@ For a new Supabase project, run `supabase/setup.sql`, `supabase/upgrade-01.sql`,
 
 The service-role key and passcodes are server secrets. Never place them in `lib/config.ts`, browser code, a `NEXT_PUBLIC_` variable, screenshots, or Git history.
 
+## Upgrade 03 — films (original-quality video)
+
+Videos are too large for Supabase's free tier (50 MB per-file cap), so film
+enclosures live in a **private Cloudflare R2 bucket**: 10 GB storage and
+unlimited downloads on the free tier, uploaded straight from the browser via
+presigned URLs and played back through short-lived signed links. Same privacy
+model as everything else — the bucket is private, and After Dark rules apply.
+
+One-time setup:
+
+1. In Supabase SQL Editor, run `supabase/upgrade-03-video.sql` (adds the
+   `video_path` column; safe to re-run).
+2. Create a Cloudflare account at dash.cloudflare.com and open **R2 Object
+   Storage**. Enabling R2 asks for a payment method; usage within the free
+   allowance (10 GB) bills $0.
+3. Create a bucket, e.g. `confession-films`. Leave it **private** (do not
+   enable the r2.dev public URL).
+4. Bucket → **Settings → CORS policy**, paste (add your Vercel domain later):
+
+   ```json
+   [
+     {
+       "AllowedOrigins": ["http://localhost:3000", "https://YOUR-DOMAIN.vercel.app"],
+       "AllowedMethods": ["GET", "PUT"],
+       "AllowedHeaders": ["*"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
+   ```
+
+5. R2 overview → **Manage R2 API Tokens** → Create API token with
+   **Object Read & Write** scoped to that one bucket. Copy the Access Key ID
+   and Secret Access Key.
+6. Fill the four `R2_*` variables in `.env.local` (and later in Vercel):
+   `R2_ACCOUNT_ID` (shown on the R2 overview page), `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY`, `R2_VIDEO_BUCKET` (the bucket name).
+
+Until those variables are set, the site works normally — attempting to post a
+film simply reports that film storage is not configured yet.
+
+Notes: films upload as-recorded (MP4/MOV/WebM, up to 1 GB each) with a
+progress percentage on the post button; playback links last six hours. If the
+10 GB fills up someday, R2 overage is ~$0.015 per GB-month, or prune old films
+in the Cloudflare dashboard.
+
 ## Local development
 
 ```bash
